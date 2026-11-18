@@ -14,7 +14,7 @@ interface TxIdRule {
 }
 
 /**
- * Each chain's transaction id. The request DTOs accept any of the three shapes
+ * Each chain's transaction id. The request DTOs accept any of the shapes
  * (they do not know the intent's chain); the service checks the one that
  * applies and stores it in the spelling the chain's own API reports, so the
  * `(consumerId, txHash)` index sees one value per transaction.
@@ -36,6 +36,11 @@ const TX_ID_RULES: Record<Chain, TxIdRule> = {
   monad: {
     re: EVM_TX_ID_RE,
     expected: 'a Monad transaction hash (0x + 64 hex characters)',
+    normalize: (id) => id.toLowerCase(),
+  },
+  arc: {
+    re: EVM_TX_ID_RE,
+    expected: 'an Arc transaction hash (0x + 64 hex characters)',
     normalize: (id) => id.toLowerCase(),
   },
 };

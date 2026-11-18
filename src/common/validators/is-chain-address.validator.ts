@@ -22,7 +22,7 @@ function chainOf(args: ValidationArguments) {
 /**
  * Validates an address against the `chain` field on the same object, by that
  * chain's entry in {@link CHAIN_ADDRESS_RULES}: Stellar G… (StrKey checksum),
- * Solana base58 (32 bytes), Monad 0x + 40 hex. A missing chain is Stellar.
+ * Solana base58 (32 bytes), Monad and Arc 0x + 40 hex. A missing chain is Stellar.
  */
 export function IsChainAddress(
   chainProperty = 'chain',

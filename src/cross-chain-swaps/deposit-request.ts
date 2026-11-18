@@ -1,4 +1,5 @@
-import { type Chain, MONAD_CHAIN_IDS } from '@/chains/chains.constants';
+import { MONAD_CHAIN_IDS } from '@/chains/chains.constants';
+import type { RouteChain } from '@/cross-chain-swaps/cross-chain-swaps.constants';
 import { parseUnits } from '@/chains/units';
 import type { CrossChainAsset } from '@/cross-chain-swaps/cross-chain-assets';
 import {
@@ -55,12 +56,12 @@ export function eip681DepositLink(
  *   - **Solana**: a Solana Pay transfer request, `spl-token` for a token;
  *   - **Monad**: EIP-681 on chain 143, `transfer` for an ERC-20.
  *
- * A `Record` over the chain union, so a new chain does not compile until it
- * says how it is paid. The other networks cross-chain swaps reach take their
+ * A `Record` over the chains the route reaches (`RouteChain`), so a new one
+ * does not compile until it says how it is paid. The other networks cross-chain swaps reach take their
  * builder from `CROSS_CHAIN_NETWORKS`, which reuses these three.
  */
 export const DEPOSIT_LINK_BUILDERS: Record<
-  Chain,
+  RouteChain,
   (terms: DepositTerms) => string
 > = {
   stellar: (terms) => {

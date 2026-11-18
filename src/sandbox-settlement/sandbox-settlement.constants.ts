@@ -145,6 +145,11 @@ export const SANDBOX_NETWORKS: Record<PaymentNetwork, SandboxNetwork> = {
   solana: notYet(
     'Solana links are paid natively on devnet; paying them from another test network is a follow-up.',
   ),
+  arc: {
+    kind: 'unavailable',
+    reason:
+      'Arc links are paid natively on Arc Testnet: the sandbox does not pay them from another test network.',
+  },
   monad: evm(
     'Monad Testnet',
     10143,

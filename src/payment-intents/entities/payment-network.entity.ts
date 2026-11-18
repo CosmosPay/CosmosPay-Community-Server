@@ -47,7 +47,7 @@ export class PaymentNetworkEntity {
     example: true,
     description:
       'True when a link here is paid through a deposit address made for each ' +
-      'payment (every network but Stellar, Solana and Monad).',
+      'payment (every network but Stellar, Solana, Monad and Arc).',
   })
   settlesThroughDeposits!: boolean;
 

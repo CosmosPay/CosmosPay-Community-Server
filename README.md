@@ -960,6 +960,17 @@ and `network` is stored as `public` / `testnet` on every chain.
 // response → { chain: "solana", uri: "solana:<base58>?amount=25.5&spl-token=…&reference=…&memo=…", chainReference, qr, … }
 ```
 
+### Payment links on Arc
+
+`chain: "arc"` is Arc, Circle's EVM chain whose gas coin is USDC, settled natively like Monad. A `prod` key reaches Arc mainnet (chain id 5042), a `dev` key Arc Testnet (5042002), and `network` is stored as `public` / `testnet`. The cross-chain route does not reach Arc (it lists no Arc token), so an Arc link is paid on Arc only (`crossChainPayment` is always false), and Arc has no swap route: `/v1/swaps` and `/v1/cross-chain-swaps` refuse `arc` (`400 validation_failed`). Everything else works as on Monad: EIP-681 links, the observer, `validate` / `PATCH` with an `0x` + 64 hex hash, deposit addresses with a relayer, merchant fees through them, customer wallets, aliases and wallet sign-in (EIP-191), `GET /v1/payment-intents/networks`, and explorer links (`https://explorer.arc.io`, `https://explorer.testnet.arc.io`).
+
+- **USDC is charged through its ERC-20 interface.** Arc's native coin is USDC: 18 decimals as a coin, 6 through the ERC-20 at `0x3600000000000000000000000000000000000000`, one balance behind both. An Arc link never charges the bare coin: an omitted asset, `native` and `USDC` all store that contract as `assetIssuer`, with `asset: "USDC"` and `assetDecimals: 6`, so an amount has at most 6 decimals and the link is `ethereum:0x3600000000000000000000000000000000000000@5042/transfer?address=<payee>&uint256=<amount in 6 decimals>`. `EURC` is a preset too, with its own contract on each tier. Any other ERC-20 is named by `assetIssuer`, its `decimals()` read on Arc, as on Monad.
+- **Either way of paying settles, and no payment counts twice.** The payer's wallet may send USDC as the ERC-20 or as a plain value transfer: both move the same balance. Arc logs every USDC movement once from its system emitter (`0xffff…fffe`, EIP-7708) in 18 decimals, and an ERC-20 transfer is also logged by the token, in 6. The verifier and the observer read only the emitter's log, cut to 6 decimals (dust under a micro-USDC is dropped, as `balanceOf` drops it), so a value transfer is found by the observer too and the two logs of one transfer are never both counted. EURC and other tokens are read from their own `Transfer` log.
+- **An amount is required without a relayer**, as on Monad: the payment is then recognised by destination, asset and exact amount, so give concurrent links to one destination distinct amounts. With `ARC_RELAYER_PRIVATE_KEY` every Arc link gets its own deposit address (open amounts and merchant fees included), forwarded by the same `contracts/PaymentForwarder.sol` and `PaymentSplitForwarder.sol` as on Monad. The deterministic deployment proxy is deployed on Arc mainnet and testnet, so each deposit address is its own `CREATE2` deployment, with nothing to deploy first.
+- **The relayer's fee is in USDC.** Gas on Arc is paid in USDC, so a USDC deposit's `networkFee` is priced like native MON's: the forward's gas budget (520k) at the current gas price plus 25%, written in 6 decimals (0.01625 USDC at 25 gwei), unless `ARC_DEPOSIT_TOKEN_FEES` names a fee for it. EURC and other tokens pay only a configured fee. The relayer never bids under Arc's 20 gwei floor: Arc drops such a transaction without an error.
+- **Final on inclusion.** A transaction is final in its block, so one confirmation settles; block timestamps repeat at one-second granularity, and the observer orders by block number.
+- **Operating it.** Nothing needs deploying. To turn deposit addresses on, generate a fresh key (never the Monad relayer's or the sandbox treasury's), set `ARC_RELAYER_PRIVATE_KEY`, and send its address USDC on each tier it serves: a forward needs about 0.03 USDC on hand (its gas limit at 45 gwei) and spends about 0.012, so 5 USDC covers a few hundred forwards. Test USDC comes from `https://faucet.circle.com`. Alert on the balance rather than overfunding it. Without the key, Arc links pay the merchant directly. The public RPCs are the defaults (`ARC_RPC_URL_MAINNET`, `ARC_RPC_URL_TESTNET`), each checked against Arc's chain id before it is trusted.
+
 ### Payment links: the public read behind a hosted checkout
 
 `GET /v1/payment-links/{id}` answers one payment intent, by id, to a caller with
@@ -1024,6 +1035,8 @@ removed: it is built field by field (`toPublicPaymentLink`), so a column added t
 - **The payer's email and the receipt.** The hosted checkout asks for an email before it offers any way to pay and records it with `POST /v1/payment-links/{id}/payer` as one checkout session: the first call answers a random `payerToken` (only its SHA-256 is stored, and it is never logged), which the page keeps and sends on its later calls (a changed email, `events`, `deposits`). Every session keeps its own email and none can change another's, so a second visitor never blocks the payer. With its token, a session also registers what it pays with on `events` (`address`, the account its wallet pays from; `txHash`, the transaction its wallet answered). When the payment succeeds, `PaymentReceiptsService` emails a receipt in that session's language through this service's mailer (`MAIL_*`), claimed once across replicas and retried by `PaymentReceiptSweeperService` for three days: to the deposit's session for a payment from another network (only it was given that deposit address); else to the session whose registered transaction or account matches the settlement's (a proof counts only when registered `PAYMENT_PAYER_PROOF_MARGIN_MS` (30 s) before the transaction's on-chain time, never when that time is unknown, and never when two sessions match it); else, when exactly one session gave an email, to it; else to nobody (`receiptSkippedAt`), and the merchant reads the emails given with `GET /v1/payment-intents/{id}/payer-emails`. A `sent` report proves nothing and decides nothing. The payer is linked to the merchant's customers (`emailProvidedByPayer: true`: unverified) only on a proof (a deposit or a match), never merged into a customer the merchant created. A wallet link scanned outside the checkout carries no email, so no receipt can follow it.
 - **An address nobody verified, so the receipt is bounded.** The receipt carries only what this service generates (amount, asset, network, date, the payment id and transaction, and links to the payment's checkout page and to the transaction's explorer), never the link's message or any other merchant text. One address gets at most `PAYMENT_RECEIPT_MAX_PER_RECIPIENT` (10) receipts a day from every merchant together, and one merchant sends at most `PAYMENT_RECEIPT_MAX_PER_MERCHANT` (1000): a receipt over either waits for the window. Residual risk: a payer whose wallet reports neither its account nor its transaction (a wallet link scanned on another device, say), on a link where several sessions gave an email, gets no automatic receipt; the merchant sees the emails given.
 
+Arc is a payment network too, settled natively (see the Arc section above): `PAYMENT_NETWORKS` is every chain, then the other networks the route reaches, 36 in all. The route does not reach Arc, so an Arc link is never paid from another network.
+
 ### Sandbox: payment links on the test networks
 
 The cross-chain route has no test network, so a `dev` key's link on a network paid through deposit addresses settles in this service's own sandbox (`src/sandbox-settlement/`), behind the same routes, deposit statuses and `PAYMENT_INTENT_*` webhooks. `GET /v1/payment-intents/networks` answers, per network and for the caller's key, whether a link can be created there, in which asset, and why not.
@@ -1048,6 +1061,8 @@ address is stored in its EIP-55 spelling. The recovery setup
 (`POST /v1/wallet/recovery/setup`) stays Stellar-only. The account's keys are
 minted the same way on every chain (see
 [No request depends on the developer platform](#no-request-depends-on-the-developer-platform)).
+
+Arc accounts sign in as Monad's do: a `chain: arc` line, EIP-191 `personal_sign`, and the EIP-55 spelling.
 
 ### Easy recovery: moving a wallet between two devices
 
@@ -1425,6 +1440,8 @@ POST /v1/swaps/quote {chain} → POST /v1/swaps {chain, source} → wallet signs
   keyless tier is the default; with `JUPITER_API_KEY`, point `JUPITER_BASE_URL`
   at `https://api.jup.ag/swap/v1`.
 
+Arc has no swap route: `chain: arc` is refused by validation (`400 validation_failed`), and the cross-chain route does not reach Arc either.
+
 ## Cross-chain swaps (NEAR Intents)
 
 Swaps **across chains** are settled by
@@ -1560,6 +1577,7 @@ It is apart from the plan commission Cosmos Pay charges, which does not change.
 | Cross-chain swaps (`POST /v1/cross-chain-swaps`) | A second NEAR Intents app fee. `wallet` is a NEAR account id, credited inside NEAR Intents. App fees are whole basis points of the deposit, so the fee becomes the basis points it amounts to, rounded down; a fee under one basis point is refused. With `payer`, the plan commission is a share of the larger deposit too |
 | Solana payment links (`POST /v1/payment-intents/pay`, `chain: solana`) | A Solana Pay transfer request names one recipient, so such a link (with an `amount`) is a Solana Pay **transaction request**: `uri` is `solana:<PAYMENT_LINK_API_URL>/v1/payment-links/{id}/solana-pay`, and the wallet POSTs the payer's account there for the transaction: the memo, the merchant's transfer carrying the link's reference, and the fee's transfer (token accounts created when missing, paid by the payer). A SOL fee goes to an account that already exists. The observer finds it by the reference and settles only on both legs |
 | Monad payment links (`POST /v1/payment-intents/pay`, `chain: monad`) | Only with deposit addresses (`MONAD_RELAYER_PRIVATE_KEY`; without them `merchant_fee_unsupported`) and an `amount`: the address is a `contracts/PaymentSplitForwarder.sol` (the fee's wallet and amount are two more constructor arguments, so the address commits to them), whose constructor pays the relayer its fee, then the merchant fee, then the merchant. The link asks for the deposit: the amount, plus the fee when the payer pays it |
+| Arc payment links (`POST /v1/payment-intents/pay`, `chain: arc`) | As on Monad: only with deposit addresses (`ARC_RELAYER_PRIVATE_KEY`; without them `merchant_fee_unsupported`) and an `amount`, through `contracts/PaymentSplitForwarder.sol`, in the link's asset (USDC through its ERC-20 interface, EURC or another ERC-20) |
 | Swaps on Solana (`POST /v1/swaps`, `chain: solana`) | Jupiter pays one integrator fee per swap and the plan commission takes it, so the fee's transfer (out of the source, in the source asset: a System transfer for SOL, else a TransferChecked after creating the wallet's token account) is appended to Jupiter's own v0 transaction: the accounts its lookup tables load are reused, every index rewritten, its compute limit raised, and the route asked with at most 40 accounts so it still fits one packet. A SOL fee goes to an account that already exists |
 | Private payments (`POST /v1/zk-payments`) | A third confidential transfer, in XLM, from the payer to `wallet`, so the fee stays as private as the payment. `wallet` must hold a confidential account on Cosmos Pay's token under auditor 0 (`400 recipient_not_registered` otherwise) and be neither the recipient nor the fee account. The 0.18% commission stays a share of `amount`, and the row's `amount` is what the payer pays in total. Confirm takes the third hash as `merchantFeeTxHash` and checks that transfer like the other two |
 | Liquidity (`POST /v1/liquidity-pools/deposit` and `/withdraw`) | A deposit or withdrawal moves two assets, so the fee is `bps` of EACH (rounded down), paid to `wallet` by one payment per asset in the same transaction, after the deposit, or after the withdrawal and its plan commission; `fixed` is refused (`400 validation_failed`). On a deposit, `recipient` takes it from the amounts (less enters the pool) and `payer` adds it on top. On a withdrawal it comes out of what the withdrawal pays, as a share of its guaranteed minimums, whichever `paidBy` names. `wallet` must exist and trust both assets. The record's `amount` / `asset` are asset A's leg, and `amountB` / `assetB` asset B's |
@@ -1917,6 +1935,8 @@ network, so adding a Solana address never demotes a Stellar one.
 chain — a wallet that does not ask for one is never handed an address it cannot
 pay — and `GET /v1/aliases/by-address/{address}` reads the chain off the address's
 own shape. A Monad address is stored and matched in its EIP-55 spelling.
+
+Arc addresses work as Monad's do (`chain: arc`, EIP-191, EIP-55). An address alone cannot tell Arc from Monad, so `by-address` without `?chain=` reads a `0x` address as Monad: pass `?chain=arc` to look one up on Arc.
 
 ### Routes
 
@@ -2555,6 +2575,13 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
   are the one native plugin route group that takes no API key.
 
 ## Upgrading — breaking changes and deploy notes
+
+### Arc: a fourth chain settled natively
+
+- **`arc` is a new value of `chain`** on payment intents and links, customer wallets, aliases and wallet sign-in, and in every OpenAPI enum that lists chains (`PAYMENT_NETWORKS` now has 36 entries, and `GET /v1/payment-intents/networks` one more row). A client that switches over `chain` should handle it. Nothing existing changes: Monad keeps its behaviour and its variables, and a `0x` address that names no chain is still read as Monad.
+- **No migration:** chains are stored as text, and Arc's deposit addresses go into `evm_deposit_address` beside Monad's (`chain = 'arc'`).
+- **New variables, all optional:** `ARC_RPC_URL_MAINNET`, `ARC_RPC_URL_TESTNET`, `ARC_RPC_TIMEOUT_MS`, `ARC_LOG_BLOCK_RANGE`, `ARC_RELAYER_PRIVATE_KEY`, `ARC_DEPOSIT_TOKEN_FEES`. Without the relayer key Arc links pay the merchant directly and need an amount; with it, fund its address with USDC on each tier (see the Arc section).
+- **Not on Arc:** same-chain and cross-chain swaps, payments from other networks, USDT0, protected payments, private payments and the sandbox. The swap routes refuse `arc` in validation.
 
 ### Payment links: a sandbox for the test networks
 
@@ -3669,8 +3696,14 @@ at least `DATABASE_URL` and `APISIX_GATEWAY_SECRET`.
 | `MONAD_LOG_BLOCK_RANGE` | no | `100` | Blocks one `eth_getLogs` may span — the RPC provider's limit (the public RPC allows 100) |
 | `MONAD_RELAYER_PRIVATE_KEY` | no | — | Relayer key (32-byte hex). Set, every Monad intent gets its own deposit address and the relayer forwards deposits to the merchant, less a fee. Holds gas money only: the forwarders it deploys can pay nobody else |
 | `MONAD_DEPOSIT_TOKEN_FEES` | no | — | Relayer fee per ERC-20 deposit, JSON `{"0xToken": "0.05"}` in token units. A token with no entry is forwarded free (the relayer pays the gas) |
+| `ARC_RPC_URL_MAINNET` | no | `https://rpc.mainnet.arc.io` | Arc RPC for `prod` keys (chain id 5042, checked before use) |
+| `ARC_RPC_URL_TESTNET` | no | `https://rpc.testnet.arc.io` | Arc RPC for `dev` keys (Arc Testnet, chain id 5042002) |
+| `ARC_RPC_TIMEOUT_MS` | no | `10000` | Budget for one Arc RPC call (ms) |
+| `ARC_LOG_BLOCK_RANGE` | no | `5000` | Blocks one `eth_getLogs` may span on Arc: the provider's limit (the public RPC allows 10,000) |
+| `ARC_RELAYER_PRIVATE_KEY` | no | none | Arc relayer key (32-byte hex), as `MONAD_RELAYER_PRIVATE_KEY` on Monad: set, every Arc link gets its own deposit address. Holds gas money (USDC) only; never the sandbox treasury's key |
+| `ARC_DEPOSIT_TOKEN_FEES` | no | none | Relayer fee per ERC-20 deposit on Arc, JSON `{"0xToken": "0.05"}` in token units. USDC needs no entry (its fee is priced from gas); another token with no entry is forwarded free |
 | `SANDBOX_DEPOSIT_SEED` | no | none | Sandbox HD seed (16 to 64 bytes, hex). With `SANDBOX_TREASURY_PRIVATE_KEY` it turns the sandbox on: a `dev` key's links on networks paid through deposit addresses settle on test networks. Test funds only |
-| `SANDBOX_TREASURY_PRIVATE_KEY` | no | none | Sandbox treasury key (32-byte hex): pays the sandbox's payouts and refunds on the EVM test networks, and is the root of the treasury's own key on each of the others (HKDF per network). Never a mainnet key; the boot refuses `MONAD_RELAYER_PRIVATE_KEY` |
+| `SANDBOX_TREASURY_PRIVATE_KEY` | no | none | Sandbox treasury key (32-byte hex): pays the sandbox's payouts and refunds on the EVM test networks, and is the root of the treasury's own key on each of the others (HKDF per network). Never a mainnet key; the boot refuses `MONAD_RELAYER_PRIVATE_KEY` / `ARC_RELAYER_PRIVATE_KEY` |
 | `SANDBOX_RPC_URLS` | no | public test-network RPCs | `net=url` pairs, comma-separated, overriding a test network's node (a JSON-RPC URL, except `sui`, a GraphQL URL, and `aptos`, its REST API's `/v1` base). Each is checked for its test network's chain identity before it is trusted |
 | `SANDBOX_CUSD_ADDRESSES` | no | none | `net=0x...` pairs: where cUSD was deployed (`npm run sandbox:deploy-cusd`). A cUSD network without its entry stays unavailable |
 | `SANDBOX_RPC_TIMEOUT_MS` | no | `15000` | Budget for one sandbox test-network call (ms) |

@@ -20,7 +20,7 @@ import {
  */
 @ApiSchema({
   description:
-    'A payment intent: one expected payment to a merchant on Stellar, Solana or Monad, with its payment link and lifecycle status.',
+    'A payment intent: one expected payment to a merchant on any network payment links settle on, with its payment link and lifecycle status.',
 })
 export class PaymentIntentEntity {
   @ApiProperty({
@@ -50,7 +50,7 @@ export class PaymentIntentEntity {
     example: 'stellar',
     description:
       'Network the payment settles on. TX intents are always Stellar; a link ' +
-      'on a network other than Stellar, Solana and Monad is paid through ' +
+      'on a network other than Stellar, Solana, Monad and Arc is paid through ' +
       'deposit addresses (`GET /v1/payment-intents/{id}/deposits`).',
   })
   chain!: string;
@@ -59,7 +59,7 @@ export class PaymentIntentEntity {
     example: 'testnet',
     description:
       'Network tier, on every chain: `public` (mainnet) or `testnet` (Stellar ' +
-      'testnet, Solana devnet, Monad testnet), the one the API key is for.',
+      'testnet, Solana devnet, Monad testnet, Arc Testnet), the one the API key is for.',
   })
   network!: string;
 
@@ -73,7 +73,7 @@ export class PaymentIntentEntity {
   @ApiProperty({
     example: 'GASMERCHANT…56charpublickey',
     description:
-      "Payee account on the intent's chain (Stellar G..., Solana base58, Monad 0x...).",
+      "Payee account on the intent's chain (Stellar G..., Solana base58, Monad and Arc 0x...).",
   })
   destination!: string;
 
@@ -96,7 +96,7 @@ export class PaymentIntentEntity {
     nullable: true,
     example: null,
     description:
-      'Stellar: the issuer. Solana: the SPL mint. Monad: the ERC-20 contract.',
+      'Stellar: the issuer. Solana: the SPL mint. Monad and Arc: the ERC-20 contract.',
   })
   assetIssuer!: string | null;
 
@@ -111,7 +111,7 @@ export class PaymentIntentEntity {
     example: null,
     description:
       'How the payment is found off Stellar. Solana: the Solana Pay ' +
-      '`reference` key. Monad with deposit addresses: the intent’s own ' +
+      '`reference` key. Monad and Arc with deposit addresses: the intent’s own ' +
       'deposit address, which the link pays. Null otherwise.',
   })
   chainReference!: string | null;
@@ -121,7 +121,7 @@ export class PaymentIntentEntity {
     example: null,
     description:
       'Deducted before the merchant is paid, in the asset’s units: the ' +
-      'relayer’s fee for forwarding a Monad deposit. Null when nothing is.',
+      'relayer’s fee for forwarding a Monad or Arc deposit. Null when nothing is.',
   })
   networkFee!: string | null;
 
@@ -203,7 +203,7 @@ export class PaymentIntentEntity {
   @ApiProperty({
     description:
       'The payment link: SEP-7 on Stellar (`tx` for TX intents, `pay` for ' +
-      'PAY), a Solana Pay transfer request on Solana, EIP-681 on Monad, the ' +
+      'PAY), a Solana Pay transfer request on Solana, EIP-681 on Monad and Arc, the ' +
       'hosted checkout on every other network.',
     example: 'web+stellar:tx?xdr=AAAAAgAAAABx…',
   })
@@ -328,7 +328,7 @@ export class TxPaymentIntentEntity {
     example: 'stellar',
     description:
       'Network the payment settles on. TX intents are always Stellar; a link ' +
-      'on a network other than Stellar, Solana and Monad is paid through ' +
+      'on a network other than Stellar, Solana, Monad and Arc is paid through ' +
       'deposit addresses (`GET /v1/payment-intents/{id}/deposits`).',
   })
   chain!: string;
@@ -337,7 +337,7 @@ export class TxPaymentIntentEntity {
     example: 'testnet',
     description:
       'Network tier, on every chain: `public` (mainnet) or `testnet` (Stellar ' +
-      'testnet, Solana devnet, Monad testnet), the one the API key is for.',
+      'testnet, Solana devnet, Monad testnet, Arc Testnet), the one the API key is for.',
   })
   network!: string;
 
@@ -380,7 +380,7 @@ export class TxPaymentIntentEntity {
     example: null,
     description:
       'How the payment is found off Stellar. Solana: the Solana Pay ' +
-      '`reference` key. Monad with deposit addresses: the intent’s own ' +
+      '`reference` key. Monad and Arc with deposit addresses: the intent’s own ' +
       'deposit address, which the link pays. Null otherwise.',
   })
   chainReference!: string | null;
@@ -390,7 +390,7 @@ export class TxPaymentIntentEntity {
     example: null,
     description:
       'Deducted before the merchant is paid, in the asset’s units: the ' +
-      'relayer’s fee for forwarding a Monad deposit. Null when nothing is.',
+      'relayer’s fee for forwarding a Monad or Arc deposit. Null when nothing is.',
   })
   networkFee!: string | null;
 
@@ -565,7 +565,7 @@ export class TxPaymentIntentEntity {
 /** Creation response for a SEP-7 `pay` intent (no source, no xdr). */
 @ApiSchema({
   description:
-    'A `pay` intent as created: a payment link and its QR. On Stellar, Solana and Monad a wallet link (SEP-7 `pay`, Solana Pay, EIP-681); on every other network the hosted checkout, paid through a deposit address made for each payment.',
+    'A `pay` intent as created: a payment link and its QR. On Stellar, Solana, Monad and Arc a wallet link (SEP-7 `pay`, Solana Pay, EIP-681); on every other network the hosted checkout, paid through a deposit address made for each payment.',
 })
 export class PayPaymentIntentEntity {
   @ApiProperty({
@@ -594,7 +594,7 @@ export class PayPaymentIntentEntity {
     example: 'stellar',
     description:
       'Network the payment settles on. TX intents are always Stellar; a link ' +
-      'on a network other than Stellar, Solana and Monad is paid through ' +
+      'on a network other than Stellar, Solana, Monad and Arc is paid through ' +
       'deposit addresses (`GET /v1/payment-intents/{id}/deposits`).',
   })
   chain!: string;
@@ -603,7 +603,7 @@ export class PayPaymentIntentEntity {
     example: 'testnet',
     description:
       'Network tier, on every chain: `public` (mainnet) or `testnet` (Stellar ' +
-      'testnet, Solana devnet, Monad testnet), the one the API key is for.',
+      'testnet, Solana devnet, Monad testnet, Arc Testnet), the one the API key is for.',
   })
   network!: string;
 
@@ -617,7 +617,7 @@ export class PayPaymentIntentEntity {
   @ApiProperty({
     example: 'GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO',
     description:
-      "Payee account on the intent's chain (Stellar G..., Solana base58, Monad 0x...).",
+      "Payee account on the intent's chain (Stellar G..., Solana base58, Monad and Arc 0x...).",
   })
   destination!: string;
 
@@ -640,7 +640,7 @@ export class PayPaymentIntentEntity {
     nullable: true,
     example: null,
     description:
-      'Stellar: the issuer. Solana: the SPL mint. Monad: the ERC-20 contract. Null for the native coin.',
+      'Stellar: the issuer. Solana: the SPL mint. Monad and Arc: the ERC-20 contract. Null for the native coin.',
   })
   assetIssuer!: string | null;
 
@@ -652,7 +652,7 @@ export class PayPaymentIntentEntity {
     example: null,
     description:
       'How the payment is found off Stellar. Solana: the Solana Pay ' +
-      '`reference` key. Monad with deposit addresses: the intent’s own ' +
+      '`reference` key. Monad and Arc with deposit addresses: the intent’s own ' +
       'deposit address, which the link pays. Null otherwise.',
   })
   chainReference!: string | null;
@@ -662,7 +662,7 @@ export class PayPaymentIntentEntity {
     example: null,
     description:
       'Deducted before the merchant is paid, in the asset’s units: the ' +
-      'relayer’s fee for forwarding a Monad deposit. Null when nothing is.',
+      'relayer’s fee for forwarding a Monad or Arc deposit. Null when nothing is.',
   })
   networkFee!: string | null;
 
@@ -750,7 +750,7 @@ export class PayPaymentIntentEntity {
     example:
       'web+stellar:pay?destination=GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO&amount=120.1234567',
     description:
-      'The payment link: SEP-7 `web+stellar:pay` on Stellar, Solana Pay on Solana, EIP-681 on Monad, the hosted checkout on every other network. With a merchant fee it is the hosted checkout on Stellar and a Solana Pay transaction request on Solana.',
+      'The payment link: SEP-7 `web+stellar:pay` on Stellar, Solana Pay on Solana, EIP-681 on Monad and Arc, the hosted checkout on every other network. With a merchant fee it is the hosted checkout on Stellar and a Solana Pay transaction request on Solana.',
   })
   uri!: string;
 

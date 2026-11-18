@@ -21,7 +21,7 @@ export interface VerificationResult {
   failedOnChain?: boolean;
   /**
    * Where a scan got to, for a chain that pages through history by block
-   * (Monad). The observer stores it on the intent so the next tick resumes
+   * (Monad, Arc). The observer stores it on the intent so the next tick resumes
    * there instead of rescanning.
    */
   nextCursor?: string;

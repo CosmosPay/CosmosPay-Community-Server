@@ -27,8 +27,12 @@ function catalogFor(environment: 'prod' | 'dev') {
 describe('PaymentNetworkCatalog', () => {
   it('offers every network on mainnet, in any asset', () => {
     const { data } = catalogFor('prod');
-    expect(data).toHaveLength(35);
+    expect(data).toHaveLength(36);
     expect(data.every((n) => n.available && n.asset === null)).toBe(true);
+    expect(data.find((n) => n.id === 'arc')).toMatchObject({
+      name: 'Arc',
+      settlesThroughDeposits: false,
+    });
     expect(data.find((n) => n.id === 'btc')).toMatchObject({
       network: 'public',
       settlesThroughDeposits: true,
@@ -42,6 +46,13 @@ describe('PaymentNetworkCatalog', () => {
     const { data } = catalogFor('dev');
     const byId = Object.fromEntries(data.map((n) => [n.id, n]));
     expect(byId.solana).toMatchObject({ available: true, network: 'testnet' });
+    // Arc Testnet is a real test network: dev keys pay Arc links natively.
+    expect(byId.arc).toMatchObject({
+      available: true,
+      network: 'testnet',
+      settlesThroughDeposits: false,
+      asset: null,
+    });
     expect(byId.base).toMatchObject({
       available: true,
       asset: { symbol: 'USDC', contract: '0xUSDC', decimals: 6 },

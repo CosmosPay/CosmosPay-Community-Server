@@ -20,7 +20,7 @@ export class CustomerWalletEntity {
   @ApiProperty({
     example: 'GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO',
     description:
-      'The address, in its chain\x27s stored spelling (EIP-55 on Monad).',
+      'The address, in its chain\x27s stored spelling (EIP-55 on Monad and Arc).',
   })
   address!: string;
 

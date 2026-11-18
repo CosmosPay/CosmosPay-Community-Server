@@ -1,3 +1,4 @@
+import { UNLISTED_CHAIN_PRICE_SOURCES } from '@/analytics/analytics.constants';
 import { MAX_TOKEN_DECIMALS } from '@/chains/chains.constants';
 import {
   supportedAssets,
@@ -8,6 +9,7 @@ import {
   isCrossChainNetworkId,
 } from '@/cross-chain-swaps/cross-chain-networks';
 import { formatNumericAmount } from '@/common/money';
+import { EVM_TOKEN_PRESETS } from '@/evm/evm.constants';
 import type { NearIntentsToken } from '@/near-intents/near-intents.types';
 
 /**
@@ -47,7 +49,9 @@ export type UsdPricer = (asset: SettledAsset) => number | null;
  *     else: a token named USDC from an issuer 1Click does not list is not USDC;
  *   - on a test network, where no issuer is ever listed, a token at the price of the one token
  *     of that symbol on the chain's mainnet (test USDC at USDC's price);
- *   - a token with no issuer recorded, by its symbol when exactly one token carries it.
+ *   - a token with no issuer recorded, by its symbol when exactly one token carries it;
+ *   - on Arc, which 1Click does not list, its preset tokens (USDC, EURC) by their contract
+ *     on that tier, at their namesake's price on Ethereum (`UNLISTED_CHAIN_PRICE_SOURCES`).
  *
  * A symbol two listed tokens share prices nothing rather than a guess, and a price that is
  * missing, zero or not finite counts as none.
@@ -65,6 +69,18 @@ export function usdPricer(
   }
 
   return ({ chain, asset, issuer }) => {
+    if (chain === 'arc') {
+      const tier = network === 'public' ? 'public' : 'testnet';
+      const preset = Object.entries(EVM_TOKEN_PRESETS.arc[tier]).find(
+        ([, p]) => p.address.toLowerCase() === issuer?.toLowerCase(),
+      );
+      return preset
+        ? bySymbol(
+            byChain.get(UNLISTED_CHAIN_PRICE_SOURCES.arc) ?? [],
+            preset[0].toLowerCase(),
+          )
+        : null;
+    }
     // Every network a payment link settles on is priced, not only the three
     // chains with a verifier of our own.
     if (!isCrossChainNetworkId(chain)) return null;

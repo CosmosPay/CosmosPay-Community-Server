@@ -130,7 +130,7 @@ export interface PluginPaymentIntent {
   asset: string;
   assetIssuer: string | null;
   memo: string;
-  /** `stellar` | `solana` | `monad`. */
+  /** `stellar` | `solana` | `monad` | `arc`, or another payment network's id. */
   chain: string;
   /** `public` | `testnet` — the network tier, on every chain. */
   network: string;

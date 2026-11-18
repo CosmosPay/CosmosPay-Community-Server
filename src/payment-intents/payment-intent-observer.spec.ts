@@ -415,6 +415,7 @@ describe('PaymentIntentObserverService.tick', () => {
         'stellar',
         'solana',
         'monad',
+        'arc',
       ]);
       expect(cap).toBe(OBSERVER_MAX_INTENTS_PER_CONSUMER);
       expect(cap).toBeLessThan(BATCH_SIZE);

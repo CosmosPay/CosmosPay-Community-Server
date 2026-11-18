@@ -291,7 +291,7 @@ export class CustomersService {
    * parameterized; the customer list is bounded by the page size.
    *
    * A payment counts toward the wallet it was paid from on its own chain: payment intents
-   * record a Monad payer EIP-55, as wallets are stored. Scoped to the network the caller's key
+   * record a Monad or Arc payer EIP-55, as wallets are stored. Scoped to the network the caller's key
    * targets, like every other payment figure, so a sandbox key's customers do not count
    * mainnet payments, nor the reverse.
    */

@@ -3,7 +3,7 @@
  * Solana (Jupiter) and Monad (Kuru Flow).
  */
 
-import type { OtherChain } from '@/chains/chains.constants';
+import type { SwapVenueChain } from '@/chains/chains.constants';
 
 /**
  * On-chain MEMO_TEXT stamped on a swap that collects the platform commission
@@ -77,10 +77,11 @@ export const SWAP_CREATE_RATE_LIMIT = {
 };
 
 /** The aggregator that builds same-chain swaps on each chain off Stellar. */
-export const CHAIN_SWAP_PROVIDERS: Record<OtherChain, 'jupiter' | 'kuru'> = {
-  solana: 'jupiter',
-  monad: 'kuru',
-};
+export const CHAIN_SWAP_PROVIDERS: Record<SwapVenueChain, 'jupiter' | 'kuru'> =
+  {
+    solana: 'jupiter',
+    monad: 'kuru',
+  };
 
 /**
  * How long a built transaction may still be submitted. Solana: a transaction
@@ -89,7 +90,7 @@ export const CHAIN_SWAP_PROVIDERS: Record<OtherChain, 'jupiter' | 'kuru'> = {
  * expires on-chain, but the price does — the minimum out still protects the
  * payer, and a two-minute-old route is one worth quoting again.
  */
-export const CHAIN_SWAP_TX_TTL_MS: Record<OtherChain, number> = {
+export const CHAIN_SWAP_TX_TTL_MS: Record<SwapVenueChain, number> = {
   solana: 60 * 1000,
   monad: 2 * 60 * 1000,
 };
@@ -100,7 +101,7 @@ export const CHAIN_SWAP_TX_TTL_MS: Record<OtherChain, number> = {
  * final. Monad: a transaction can sit in the mempool behind a low fee; half an
  * hour, and a later sighting still settles it (see the rescue window).
  */
-export const CHAIN_SWAP_LANDING_WINDOW_MS: Record<OtherChain, number> = {
+export const CHAIN_SWAP_LANDING_WINDOW_MS: Record<SwapVenueChain, number> = {
   solana: 3 * 60 * 1000,
   monad: 30 * 60 * 1000,
 };

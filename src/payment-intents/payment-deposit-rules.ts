@@ -24,6 +24,7 @@ import {
 import {
   isDepositNetwork,
   isPaymentNetwork,
+  isRoutedNetwork,
 } from '@/payment-intents/payment-networks';
 import { isChain } from '@/chains/chains.constants';
 import { decimalPlaces } from '@/chains/units';
@@ -41,6 +42,8 @@ export type CrossChainPayableFields = Pick<
  * payment from another network is an exact-output quote at the cross-chain
  * route that pays the intent's destination, so it needs:
  *
+ *   - a network the cross-chain route reaches (every one but Arc, whose links
+ *     are paid on Arc only);
  *   - a payment link (`PAY`): a `TX` intent is a Stellar envelope one known
  *     payer signs;
  *   - mainnet, or, on a test network, a link on a network paid through
@@ -61,6 +64,9 @@ export function crossChainPaymentRefusal(
   intent: CrossChainPayableFields,
 ): string | null {
   if (!isPaymentNetwork(intent.chain)) return 'it is on an unknown network';
+  if (!isRoutedNetwork(intent.chain)) {
+    return 'it is paid on its own network only';
+  }
   if (intent.kind !== 'PAY') return 'it is a transaction for one known payer';
   // On a test network only the networks paid through deposit addresses take
   // payments from another network: the sandbox settles those itself (and says

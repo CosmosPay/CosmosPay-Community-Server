@@ -47,6 +47,7 @@ import {
   type DepositNetwork,
   isDepositNetwork,
   type PaymentNetwork,
+  isRoutedNetwork,
   paymentAddressRule,
   paymentNetworkOf,
 } from '@/payment-intents/payment-networks';
@@ -75,6 +76,7 @@ import {
   type PaymentIntentTerms,
 } from '@/payment-intents/payment-intent-replay';
 import { Sep7LinkBuilder } from '@/payment-intents/sep7-link-builder.service';
+import { isEvmChain } from '@/evm/evm.constants';
 import { ChainPayLinkBuilder } from '@/payment-intents/chain-pay-link-builder.service';
 import { PaymentVerifiers } from '@/payment-intents/payment-verifiers';
 import {
@@ -543,6 +545,7 @@ export class PaymentIntentsService {
         amount: dto.amount,
         merchantFee: !!merchant,
         recognisedByAmount: false,
+        routed: true,
       }),
       ...depositLimitColumns(dto.depositLimits),
     });
@@ -570,7 +573,7 @@ export class PaymentIntentsService {
   }
 
   /**
-   * A PAY intent on Solana or Monad: a Solana Pay transfer request or an
+   * A PAY intent on Solana, Monad or Arc: a Solana Pay transfer request or an
    * EIP-681 link, built by {@link ChainPayLinkBuilder}. The memo is still the
    * idempotency key, and a retry is still held to the same payment
    * ({@link replayOf}) — compared in the chain's stored spelling, so an EVM
@@ -607,7 +610,7 @@ export class PaymentIntentsService {
     const network = this.resolveNetwork(consumer);
     const localConsumer = await this.resolveConsumer(consumer);
     const memo = resolveOrMintMemoId(dto.memo);
-    const normalized = this.chainLinks.normalize(chain, dto);
+    const normalized = this.chainLinks.normalize(chain, network, dto);
     const terms: PaymentIntentTerms = {
       kind: 'PAY',
       chain,
@@ -649,7 +652,7 @@ export class PaymentIntentsService {
     // A Solana link with a merchant fee is a Solana Pay transaction request:
     // the wallet asks the gateway for the transaction with both transfers
     // (`/v1/payment-links/{id}/solana-pay`), so its link names the intent id.
-    // On Monad the deposit address pays the fee (PaymentSplitForwarder).
+    // On Monad and Arc the deposit address pays the fee (PaymentSplitForwarder).
     const merchant = link.merchantFee ?? null;
     const transactionRequest = chain === 'solana' && merchant !== null;
     let intent = await this.persist({
@@ -665,10 +668,12 @@ export class PaymentIntentsService {
         network,
         amount: dto.amount,
         merchantFee: merchant !== null,
-        // A Monad link without a deposit address is found by its amount at the
+        // An EVM link without a deposit address is found by its amount at the
         // merchant's own address, where a payout from another network for the
         // same amount would also land: it would settle the wrong link.
-        recognisedByAmount: chain === 'monad' && !link.chainReference,
+        recognisedByAmount: isEvmChain(chain) && !link.chainReference,
+        // Arc: the cross-chain route does not reach it at all.
+        routed: isRoutedNetwork(chain),
       }),
       ...depositLimitColumns(dto.depositLimits),
       assetDecimals: link.assetDecimals,
@@ -899,11 +904,12 @@ export class PaymentIntentsService {
 
   /**
    * The plan commission a payment from another network will pay on a link on
-   * Stellar, Solana or Monad, or null when that link cannot take one: a test
-   * network, an open amount, a merchant fee, a link found on its chain by its
-   * amount alone, or a rate this deployment cannot charge right now (no plan
-   * header, no wallet for the commission). Never in the way of the link: it is
-   * created as it always was, only without payments from other networks.
+   * Stellar, Solana or Monad, or null when that link cannot take one: a chain
+   * the cross-chain route does not reach (Arc), a test network, an open
+   * amount, a merchant fee, a link found on its chain by its amount alone, or a
+   * rate this deployment cannot charge right now (no plan header, no wallet for
+   * the commission). Never in the way of the link: it is created as it always
+   * was, only without payments from other networks.
    */
   private optionalCrossChainFeeBps(
     consumer: GatewayConsumer,
@@ -912,9 +918,11 @@ export class PaymentIntentsService {
       amount: string | undefined;
       merchantFee: boolean;
       recognisedByAmount: boolean;
+      routed: boolean;
     },
   ): number | null {
     if (
+      !link.routed ||
       link.network !== 'public' ||
       link.merchantFee ||
       link.recognisedByAmount

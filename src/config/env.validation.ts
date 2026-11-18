@@ -196,6 +196,40 @@ class EnvironmentVariables {
   })
   MONAD_RELAYER_PRIVATE_KEY?: string;
 
+  // --- Arc RPC and relayer (payment links, wallet sign-in, aliases) ---
+  @IsOptional()
+  @IsUrl(URL_OPTIONS)
+  ARC_RPC_URL_MAINNET?: string;
+
+  @IsOptional()
+  @IsUrl(URL_OPTIONS)
+  ARC_RPC_URL_TESTNET?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  ARC_RPC_TIMEOUT_MS?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  ARC_LOG_BLOCK_RANGE?: number;
+
+  /**
+   * Turns on Arc deposit addresses, as `MONAD_RELAYER_PRIVATE_KEY` does on
+   * Monad: a hot key that holds gas (USDC on Arc) and nothing else.
+   */
+  @IsOptional()
+  @Matches(/^(0x)?[0-9a-fA-F]{64}$/, {
+    message: 'ARC_RELAYER_PRIVATE_KEY must be a 32-byte hex secret key',
+  })
+  ARC_RELAYER_PRIVATE_KEY?: string;
+
+  /** `{"0xToken…": "0.05"}`: checked in full by `parseEvmTokenFees`. */
+  @IsOptional()
+  @IsString()
+  ARC_DEPOSIT_TOKEN_FEES?: string;
+
   // --- Sandbox settlement (payment links on test networks) ---
   /** BIP-32 seed every sandbox deposit address is derived from: 16 to 64 bytes, hex. */
   @IsOptional()
@@ -757,19 +791,24 @@ export function validateEnv(config: Record<string, unknown>) {
   }
 
   // The sandbox treasury holds test funds and signs on test networks only; the
-  // Monad relayer signs forwarder deployments on mainnet and nothing else. One key
+  // Monad and Arc relayers sign forwarder deployments and nothing else. One key
   // for both would give each a second use, which both their threat models exclude.
   const hexKey = (v: string | undefined) =>
     (v ?? '').trim().toLowerCase().replace(/^0x/, '');
-  if (
-    validated.SANDBOX_TREASURY_PRIVATE_KEY &&
-    hexKey(validated.SANDBOX_TREASURY_PRIVATE_KEY) ===
-      hexKey(validated.MONAD_RELAYER_PRIVATE_KEY)
-  ) {
-    throw new Error(
-      'SANDBOX_TREASURY_PRIVATE_KEY must not be MONAD_RELAYER_PRIVATE_KEY: the ' +
-        'sandbox treasury and the mainnet relayer are separate keys.',
-    );
+  for (const relayer of [
+    'MONAD_RELAYER_PRIVATE_KEY',
+    'ARC_RELAYER_PRIVATE_KEY',
+  ] as const) {
+    if (
+      validated.SANDBOX_TREASURY_PRIVATE_KEY &&
+      hexKey(validated.SANDBOX_TREASURY_PRIVATE_KEY) ===
+        hexKey(validated[relayer])
+    ) {
+      throw new Error(
+        `SANDBOX_TREASURY_PRIVATE_KEY must not be ${relayer}: the ` +
+          'sandbox treasury and the mainnet relayer are separate keys.',
+      );
+    }
   }
 
   if (!validated.APISIX_GATEWAY_SECRET) {
@@ -824,6 +863,7 @@ export function validateEnv(config: Record<string, unknown>) {
   // Parsed here as well, so a malformed value fails the boot naming its
   // variable instead of surfacing from the configuration factory.
   parseEvmTokenFees(validated.MONAD_DEPOSIT_TOKEN_FEES);
+  parseEvmTokenFees(validated.ARC_DEPOSIT_TOKEN_FEES, 'ARC_DEPOSIT_TOKEN_FEES');
 
   return validated;
 }

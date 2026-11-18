@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import type { OtherChain } from '@/chains/chains.constants';
+import type { SwapVenueChain } from '@/chains/chains.constants';
 import {
   AdvisoryLockKey,
   AdvisoryLockService,
@@ -91,7 +91,7 @@ export class ChainSwapObserverService extends ScheduledJob {
           await this.swaps.settle(swap, username, 'EXPIRED');
           continue;
         }
-        const chain = swap.chain as OtherChain;
+        const chain = swap.chain as SwapVenueChain;
         const outcome = await this.swaps.venue(chain).settlement(swap.txHash);
         if (outcome) {
           await this.swaps.settle(swap, username, outcome);

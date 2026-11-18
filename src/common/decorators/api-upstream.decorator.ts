@@ -6,6 +6,7 @@ export type UpstreamProvider =
   | 'Horizon'
   | 'Solana'
   | 'Monad'
+  | 'Arc'
   | 'Cross-chain route'
   | 'Solana swap route'
   | 'Monad swap route'

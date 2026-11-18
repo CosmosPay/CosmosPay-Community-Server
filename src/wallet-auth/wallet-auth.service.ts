@@ -1296,7 +1296,7 @@ export class WalletAuthService {
     signature: string,
     network?: StellarNetwork,
   ): Promise<boolean> {
-    // Solana and Monad accounts are their key: no signer set to consult, and
+    // Solana, Monad and Arc accounts are their key: no signer set to consult, and
     // no network call. Each chain's wallets sign the way `message-signature`
     // describes.
     if (chain !== 'stellar') {

@@ -1,10 +1,12 @@
 import { createHash, randomBytes } from 'crypto';
-import { CROSS_CHAIN_NETWORKS } from '@/cross-chain-swaps/cross-chain-networks';
 import {
   PAYMENT_PAYER_PROOF_MARGIN_MS,
   PAYMENT_PAYER_TOKEN_BYTES,
 } from '@/payment-intents/payment-intents.constants';
-import { isPaymentNetwork } from '@/payment-intents/payment-networks';
+import {
+  isPaymentNetwork,
+  PAYMENT_NETWORK_RULES,
+} from '@/payment-intents/payment-networks';
 
 /**
  * A hosted checkout session's credential: random, handed to that session's
@@ -41,7 +43,7 @@ export interface PaymentSettlementFields {
   /**
    * When the settling transaction closed on-chain; a proof counts only when
    * registered at least `PAYMENT_PAYER_PROOF_MARGIN_MS` before it. Null when
-   * the chain's time is not known (a Monad deposit-address sweep, whose
+   * the chain's time is not known (a Monad or Arc deposit-address sweep, whose
    * deposit was public before it): then no proof counts (fail closed).
    */
   paidAt: Date | null;
@@ -74,7 +76,7 @@ export function receiptRecipient<T extends PayerSessionFields>(
   settled: PaymentSettlementFields,
 ): ReceiptRecipient<T> | null {
   if (isPaymentNetwork(settled.chain)) {
-    const rules = CROSS_CHAIN_NETWORKS[settled.chain];
+    const rules = PAYMENT_NETWORK_RULES[settled.chain];
     const cutoff =
       settled.paidAt === null
         ? null
