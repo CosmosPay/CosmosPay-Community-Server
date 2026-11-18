@@ -9,9 +9,13 @@ import type { StellarNetwork } from '@/config/configuration';
  * Each chain is served on two network tiers, picked by the caller's API key
  * exactly as for Stellar — a `prod` key reaches the chain's mainnet, a `dev` key
  * its test network — and stored in the same `network` column (`public` /
- * `testnet`) so filters and analytics read one vocabulary for all three.
+ * `testnet`) so filters and analytics read one vocabulary for all of them.
+ *
+ * Arc (Circle's EVM chain, USDC as its gas coin) is settled natively like
+ * Monad, but the cross-chain route does not reach it and it has no swap venue:
+ * see {@link SWAP_CHAINS} and `RouteChain` in `cross-chain-swaps.constants`.
  */
-export const CHAINS = ['stellar', 'solana', 'monad'] as const;
+export const CHAINS = ['stellar', 'solana', 'monad', 'arc'] as const;
 export type Chain = (typeof CHAINS)[number];
 
 /** What a request that names no chain means. */
@@ -34,24 +38,63 @@ export const CHAIN_NETWORK_NAMES: Record<
   stellar: { public: 'public', testnet: 'testnet' },
   solana: { public: 'mainnet-beta', testnet: 'devnet' },
   monad: { public: 'mainnet', testnet: 'testnet' },
+  arc: { public: 'mainnet', testnet: 'testnet' },
 };
 
-/** The native coin's ticker, per chain — what `assetCode` may say for it. */
+/** Each chain's name, as errors and catalogs write it. */
+export const CHAIN_DISPLAY_NAMES: Record<Chain, string> = {
+  stellar: 'Stellar',
+  solana: 'Solana',
+  monad: 'Monad',
+  arc: 'Arc',
+};
+
+/**
+ * The chains with a same-chain swap venue (`/v1/swaps`): the Stellar DEX and
+ * one `ChainSwapVenue` per other entry. Arc has none: no aggregator builds
+ * swaps there, so a swap request naming it is refused by validation.
+ */
+export const SWAP_CHAINS = [
+  'stellar',
+  'solana',
+  'monad',
+] as const satisfies readonly Chain[];
+export type SwapChain = (typeof SWAP_CHAINS)[number];
+
+/** The swap chains other than Stellar: one `ChainSwapVenue` each. */
+export type SwapVenueChain = Exclude<SwapChain, 'stellar'>;
+
+export function isSwapChain(value: unknown): value is SwapChain {
+  return (
+    typeof value === 'string' &&
+    (SWAP_CHAINS as readonly string[]).includes(value)
+  );
+}
+
+/**
+ * The native coin's ticker, per chain: what `assetCode` may say for it. On
+ * Arc the native coin IS USDC: a payment link there charges it through its
+ * ERC-20 interface (`EVM_NATIVE_TOKEN_INTERFACES`), so `USDC`, `native` and an
+ * omitted asset all store that contract, in its 6 decimals.
+ */
 export const NATIVE_ASSET_CODES: Record<Chain, string> = {
   stellar: 'XLM',
   solana: 'SOL',
   monad: 'MON',
+  arc: 'USDC',
 };
 
 /**
  * Decimal places of each chain's native coin: stroops, lamports, wei. A token
  * carries its own (an SPL mint's `decimals`, an ERC-20's `decimals()`), read
- * from the chain when an intent is created.
+ * from the chain when an intent is created. Arc's native USDC has 18, like any
+ * EVM coin; its ERC-20 interface, which payment links use, has 6.
  */
 export const NATIVE_DECIMALS: Record<Chain, number> = {
   stellar: 7,
   solana: 9,
   monad: 18,
+  arc: 18,
 };
 
 /**
@@ -64,6 +107,16 @@ export const NATIVE_DECIMALS: Record<Chain, number> = {
 export const MONAD_CHAIN_IDS: Record<StellarNetwork, number> = {
   public: 143,
   testnet: 10143,
+};
+
+/**
+ * Arc's EIP-155 chain ids, not configurable for the reason Monad's are not.
+ * Checked against Arc's own docs (docs.arc.io, "Connect to Arc") and the nodes
+ * on 2026-11-18: rpc.mainnet.arc.io → 0x13b2, rpc.testnet.arc.io → 0x4cef52.
+ */
+export const ARC_CHAIN_IDS: Record<StellarNetwork, number> = {
+  public: 5042,
+  testnet: 5042002,
 };
 
 /**

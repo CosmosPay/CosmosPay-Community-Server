@@ -238,7 +238,7 @@ export class FinishWalletSignInDto {
     default: 'stellar',
     description:
       'Chain the account is on. Omit for Stellar. Solana signs the challenge ' +
-      'with ed25519 over its UTF-8 bytes; Monad with EIP-191 `personal_sign`.',
+      'with ed25519 over its UTF-8 bytes; Monad and Arc with EIP-191 `personal_sign`.',
   })
   @IsOptional()
   @IsIn(CHAINS)
@@ -246,7 +246,7 @@ export class FinishWalletSignInDto {
 
   @ApiPropertyOptional({
     description:
-      'The account on `chain`: Stellar G…, Solana base58, Monad 0x…. Send this ' +
+      'The account on `chain`: Stellar G…, Solana base58, Monad and Arc 0x…. Send this ' +
       'or `stellarAddress`, not both.',
     example: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
   })
@@ -282,7 +282,7 @@ export class FinishWalletSignInDto {
   @ApiProperty({
     description:
       'Signature over the sign-in challenge: base64 ed25519 on Stellar, base64 ' +
-      'or base58 ed25519 on Solana, 0x-hex EIP-191 on Monad. The exact bytes ' +
+      'or base58 ed25519 on Solana, 0x-hex EIP-191 on Monad and Arc. The exact bytes ' +
       'are documented on the operation; a client that rebuilds them from prose ' +
       'is one field-order change away from producing signatures nothing accepts.',
   })
@@ -326,7 +326,7 @@ export class ReplaceWalletBackupDto {
     default: 'stellar',
     description:
       'Chain the account is on. Omit for Stellar. Solana signs the challenge ' +
-      'with ed25519 over its UTF-8 bytes; Monad with EIP-191 `personal_sign`.',
+      'with ed25519 over its UTF-8 bytes; Monad and Arc with EIP-191 `personal_sign`.',
   })
   @IsOptional()
   @IsIn(CHAINS)
@@ -334,7 +334,7 @@ export class ReplaceWalletBackupDto {
 
   @ApiPropertyOptional({
     description:
-      'The account on `chain`: Stellar G…, Solana base58, Monad 0x…. Send this ' +
+      'The account on `chain`: Stellar G…, Solana base58, Monad and Arc 0x…. Send this ' +
       'or `stellarAddress`, not both.',
     example: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
   })

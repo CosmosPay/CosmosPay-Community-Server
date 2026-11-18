@@ -138,7 +138,22 @@ export const CHAIN_ADDRESS_RULES: Record<Chain, ChainAddressRule> = {
     expected: 'a valid Monad (EVM) address (0x + 40 hex)',
     normalize: toChecksumAddress,
   },
+  arc: {
+    isValid: isEvmAddress,
+    expected: 'a valid Arc (EVM) address (0x + 40 hex)',
+    normalize: toChecksumAddress,
+  },
 };
+
+/**
+ * The chains a field that names no chain can read from an address's shape.
+ * Arc's addresses are Monad's shape (0x + 40 hex, one EIP-55 spelling on
+ * both), and such a field read a 0x address as Monad before Arc existed, so it
+ * still does: an Arc wallet is one a request names with `chain: arc`.
+ */
+const SHAPE_CHAINS: readonly Chain[] = CHAINS.filter(
+  (chain) => chain !== 'arc',
+);
 
 export function isAddressForChain(chain: Chain, address: string): boolean {
   return CHAIN_ADDRESS_RULES[chain].isValid(address);
@@ -152,13 +167,14 @@ export function normalizeAddress(chain: Chain, address: string): string {
  * The chain an address belongs to, read from its shape alone, for a field that names no
  * chain (a customer's `account`). The shapes do not overlap: a Stellar key is 56 base32
  * characters starting with G, a Solana key is base58 for 32 bytes (at most 44 characters, and
- * no `0`), a Monad address is 0x + 40 hex. Null when no rule accepts it, and also when more
- * than one would, so a future chain whose shape collides is refused rather than guessed.
+ * no `0`), a Monad address is 0x + 40 hex (Arc's too, read as Monad: see `SHAPE_CHAINS`).
+ * Null when no rule accepts it, and also when more than one would, so a future chain whose
+ * shape collides is refused rather than guessed.
  */
 export function chainOfAddress(address: string): Chain | null {
   // No accepted address is longer than a Stellar key (56 characters).
   if (typeof address !== 'string' || address.length > 64) return null;
-  const matches = CHAINS.filter((chain) =>
+  const matches = SHAPE_CHAINS.filter((chain) =>
     CHAIN_ADDRESS_RULES[chain].isValid(address),
   );
   return matches.length === 1 ? matches[0] : null;
@@ -178,7 +194,7 @@ export function normalizeAnyChainAddress(address: string): string | null {
  * each chain's own wording: "a valid Stellar account address (G...), a valid Solana address
  * (base58, 32 bytes) or a valid Monad (EVM) address (0x + 40 hex)".
  */
-const EXPECTED_PER_CHAIN = CHAINS.map(
+const EXPECTED_PER_CHAIN = SHAPE_CHAINS.map(
   (chain) => CHAIN_ADDRESS_RULES[chain].expected,
 );
 export const ANY_CHAIN_ADDRESS_EXPECTED = `${EXPECTED_PER_CHAIN.slice(0, -1).join(', ')} or ${EXPECTED_PER_CHAIN[EXPECTED_PER_CHAIN.length - 1]}`;

@@ -53,7 +53,7 @@ export function buildSwaggerConfig(openapi: AppConfig['openapi']) {
     .setTitle('Cosmos Pay Payments API')
     .setDescription(
       'Payments API for merchants and wallets. It covers: payment intents ' +
-        'on Stellar, Solana and Monad (with payment links, customers and a ' +
+        'on every network payment links settle on (with payment links, customers and a ' +
         'product catalog); swaps on Stellar (path payments), Solana and ' +
         'Monad, cross-chain swaps across Stellar, Solana, Monad and other ' +
         'networks, and USDT0 transfers from Stellar to EVM networks through ' +
@@ -338,7 +338,7 @@ type SharedErrorResponse = keyof typeof SHARED_ERROR_RESPONSES;
  * Which statuses each provider can fail with. Horizon (and the Soroban RPC) is
  * reached through the Stellar SDK, which this service wraps in a plain `503`: it has no timeout
  * of its own to report and no body to pass through — while the HTTP clients
- * (BlindPay's, NEAR Intents', and the Solana and Monad JSON-RPC transport) distinguish
+ * (BlindPay's, NEAR Intents', and the Solana, Monad and Arc JSON-RPC transport) distinguish
  * "refused" (502), "down" (503) and "timed out" (504).
  */
 const UPSTREAM_FAILURES: Record<
@@ -349,6 +349,7 @@ const UPSTREAM_FAILURES: Record<
   Horizon: ['UpstreamUnavailable'],
   Solana: ['UpstreamError', 'UpstreamUnavailable', 'UpstreamTimeout'],
   Monad: ['UpstreamError', 'UpstreamUnavailable', 'UpstreamTimeout'],
+  Arc: ['UpstreamError', 'UpstreamUnavailable', 'UpstreamTimeout'],
   'Cross-chain route': [
     'UpstreamError',
     'UpstreamUnavailable',

@@ -58,6 +58,8 @@ const NO_RIVALS: Prisma.PaymentIntentWhereInput = { id: { in: [] } };
  *   every intent is identified by an address nobody else can hold.
  * - Monad, an intent with a deposit address: none. The address exists only on
  *   this intent, and a copy aimed at it is necessarily younger.
+ * - Arc: Monad's rule, for the same reasons (EIP-681, no memo, deposit
+ *   addresses with a relayer).
  */
 export const SETTLEMENT_RIVAL_FILTERS: Record<
   Chain,
@@ -74,14 +76,19 @@ export const SETTLEMENT_RIVAL_FILTERS: Record<
     intent.chainReference
       ? { chainReference: intent.chainReference }
       : NO_RIVALS,
-  monad: (intent) =>
-    intent.chainReference
-      ? NO_RIVALS
-      : {
-          chainReference: intent.destination,
-          assetIssuer: intent.assetIssuer,
-        },
+  monad: (intent) => evmRivals(intent),
+  arc: (intent) => evmRivals(intent),
 };
+
+/** The EVM rule above (Monad, Arc): a direct intent's rivals are deposit addresses at its payee. */
+function evmRivals(intent: PaymentIntent): Prisma.PaymentIntentWhereInput {
+  return intent.chainReference
+    ? NO_RIVALS
+    : {
+        chainReference: intent.destination,
+        assetIssuer: intent.assetIssuer,
+      };
+}
 
 /**
  * Rivals by amount on Stellar: open ones, or ones for the same number of

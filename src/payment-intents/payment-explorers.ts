@@ -1,6 +1,8 @@
-import { CROSS_CHAIN_NETWORKS } from '@/cross-chain-swaps/cross-chain-networks';
 import type { StellarNetwork } from '@/config/configuration';
-import type { PaymentNetwork } from '@/payment-intents/payment-networks';
+import {
+  PAYMENT_NETWORK_RULES,
+  type PaymentNetwork,
+} from '@/payment-intents/payment-networks';
 
 type TxUrl = (hash: string) => string;
 
@@ -18,7 +20,7 @@ const blockchair =
 /**
  * Where a payment's transaction can be looked at, per network and tier: the
  * same explorers the developer platform links (its `src/lib/chains.ts`).
- * Stellar, Solana and Monad have a test network; every other network is paid
+ * Stellar, Solana, Monad and Arc have a test network; every other network is paid
  * on mainnet only. A network with no explorer we checked (Robinhood Chain,
  * Aleo, Fogo) has none, and the receipt names the transaction without a link.
  */
@@ -37,6 +39,12 @@ const PAYMENT_EXPLORERS: Record<
   monad: {
     public: scan('https://monadscan.com'),
     testnet: scan('https://testnet.monadexplorer.com'),
+  },
+  // docs.arc.io, "Connect to Arc"; `/tx/<hash>` and `/address/<address>`
+  // answered on both (2026-11-18).
+  arc: {
+    public: scan('https://explorer.arc.io'),
+    testnet: scan('https://explorer.testnet.arc.io'),
   },
   eth: { public: scan('https://etherscan.io') },
   base: { public: scan('https://basescan.org') },
@@ -91,7 +99,7 @@ export function paymentExplorerTxUrl(
   hash: string | null | undefined,
 ): string | null {
   if (!hash) return null;
-  const rule = CROSS_CHAIN_NETWORKS[chain].txId;
+  const rule = PAYMENT_NETWORK_RULES[chain].txId;
   if (!rule.isValid(hash)) return null;
   const url = PAYMENT_EXPLORERS[chain][network];
   return url ? url(encodeURIComponent(rule.normalize(hash))) : null;

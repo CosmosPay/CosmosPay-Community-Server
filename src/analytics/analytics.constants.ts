@@ -3,6 +3,8 @@ import type {
   SwapStatus,
   Usdt0TransferStatus,
 } from '@generated/prisma/client';
+import type { CrossChainNetworkId } from '@/cross-chain-swaps/cross-chain-swaps.constants';
+import type { NativeOnlyChain } from '@/payment-intents/payment-networks';
 
 /** Tuning knobs for the read-only analytics aggregates. */
 
@@ -18,6 +20,19 @@ export const DAY_MS = 24 * 60 * 60 * 1000;
  * goes on and fills the cache for the next read.
  */
 export const USD_PRICES_WAIT_MS = 2_500;
+
+/**
+ * Where a chain the cross-chain route does not list takes its prices: Arc's preset tokens
+ * (USDC and EURC, matched by their known contracts in `EVM_TOKEN_PRESETS`) at the price of
+ * their namesake on Ethereum's list, the one network where each is Circle's own. Any other
+ * Arc token has no price.
+ */
+export const UNLISTED_CHAIN_PRICE_SOURCES: Record<
+  NativeOnlyChain,
+  CrossChainNetworkId
+> = {
+  arc: 'eth',
+};
 
 /**
  * Distinct (consumer, network, figure) answers the analytics cache holds at once; the least

@@ -100,7 +100,7 @@ model Customer {
   @@map("customer")
 }
 
-// A wallet of a customer: one customer has any number of them, on Stellar, Solana or Monad.
+// A wallet of a customer: one customer has any number of them, on Stellar, Solana, Monad or Arc.
 // A wallet belongs to one customer of a merchant (unique per consumer, chain and address), so
 // a payment's payer counts toward exactly one customer. `consumerId` repeats the customer's
 // for that constraint and for the payer lookup on settlement.
@@ -110,7 +110,7 @@ model CustomerWallet {
   customerId String
   customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
   chain      String
-  // In its chain's stored spelling (EIP-55 on Monad), as payment intents record a payer.
+  // In its chain's stored spelling (EIP-55 on Monad and Arc), as payment intents record a payer.
   address    String
   label      String?
   createdAt  DateTime @default(now())
@@ -381,7 +381,7 @@ model PaymentIntent {
   kind PaymentIntentKind @default(TX)
 
   // Which network the payment settles on: a network id from
-  // `PAYMENT_NETWORKS` (`stellar`, `solana`, `monad`, `eth`, `btc`, ...). Every
+  // `PAYMENT_NETWORKS` (`stellar`, `solana`, `monad`, `arc`, `eth`, `btc`, ...). Every
   // row created before Solana and Monad existed is Stellar. TX intents are
   // Stellar only (SEP-7 `tx` is a Stellar envelope). On a network other than
   // the three, the payer pays a deposit address (`deposits`) and the intent
@@ -389,11 +389,11 @@ model PaymentIntent {
   chain String @default("stellar")
 
   // Payment details, in the chain's own address and asset vocabulary.
-  source        String? // payer account (Stellar G…, Solana base58, Monad 0x…) — null for PAY intents
+  source        String? // payer account (Stellar G…, Solana base58, Monad/Arc 0x…); null for PAY intents
   destination   String // payee account, same vocabulary
   amount        String? // decimal string, e.g. "25.5" — optional for PAY intents
   asset         String  @default("native") // asset code, or "native" for the chain's coin
-  // Stellar: the asset's issuer. Solana: the SPL mint. Monad: the ERC-20
+  // Stellar: the asset's issuer. Solana: the SPL mint. Monad and Arc: the ERC-20
   // contract (EIP-55). Null for the native coin.
   assetIssuer   String?
   // The asset's decimals, read from the chain at creation (SPL mint, ERC-20
@@ -406,15 +406,15 @@ model PaymentIntent {
   network       String // 'public' | 'testnet' — the tier, on every chain
 
   // How the payment is found on chains without a Stellar memo. Solana: the
-  // Solana Pay `reference` key the wallet adds to the transfer. Monad with a
+  // Solana Pay `reference` key the wallet adds to the transfer. Monad and Arc with a
   // relayer: the intent's CREATE2 deposit address (see `evmDeposit`). Null
   // otherwise.
   chainReference String?
   // What is deducted before the merchant receives the payment, as a decimal in
-  // the asset's units: the relayer's fee for forwarding a Monad deposit. Null
+  // the asset's units: the relayer's fee for forwarding a Monad or Arc deposit. Null
   // when nothing is.
   networkFee     String?
-  // Monad: the last block the observer has scanned for this intent's ERC-20
+  // Monad and Arc: the last block the observer has scanned for this intent's ERC-20
   // transfer, as a decimal string. Starts at the chain head when created.
   chainCursor    String?
 
@@ -509,7 +509,7 @@ model PaymentIntent {
   // Back-relation for the cursor table below. Virtual — no column.
   horizonCursor HorizonAccountCursor?
 
-  // A Monad intent's deposit address, when the deployment has a relayer.
+  // A Monad or Arc intent's deposit address, when the deployment has that chain's relayer.
   evmDeposit EvmDepositAddress?
 
   // The transaction that settled it, once it has. Virtual — no column.
@@ -540,7 +540,7 @@ model PaymentIntent {
   @@map("payment_intent")
 }
 
-// The CREATE2 deposit address of one Monad payment intent — see
+// The CREATE2 deposit address of one Monad or Arc payment intent: see
 // `contracts/PaymentForwarder.sol`. The payer pays here; the relayer deploys a
 // forwarder at this address that sends the money on to `destination`, less
 // `fee`. Every field that went into the address is kept, because the address
@@ -555,7 +555,7 @@ model EvmDepositAddress {
   intentId String?        @unique
   intent   PaymentIntent? @relation(fields: [intentId], references: [id], onDelete: SetNull)
 
-  chain   String // 'monad'
+  chain   String // 'monad' | 'arc'
   network String // 'public' | 'testnet'
 
   // EIP-55. Unique: one salt, one address, one intent.
@@ -1705,10 +1705,10 @@ model AliasAddress {
   aliasId String
   alias   Alias  @relation(fields: [aliasId], references: [id], onDelete: Cascade)
 
-  /// `stellar` | `solana` | `monad`. Every row from before the others existed is
+  /// `stellar` | `solana` | `monad` | `arc`. Every row from before the others existed is
   /// Stellar.
   chain   String  @default("stellar")
-  /// The chain's own address: Stellar G…, Solana base58, Monad 0x… (EIP-55).
+  /// The chain's own address: Stellar G…, Solana base58, Monad and Arc 0x… (EIP-55).
   address String
   /// Network id as the wallet names it: `public` | `testnet` | a custom id.
   network String
@@ -1818,7 +1818,7 @@ model WalletAccount {
   /// How the email was proven the last time this account signed in.
   method WalletAuthMethod
 
-  /// Which chain `address` is on: `stellar` | `solana` | `monad`.
+  /// Which chain `address` is on: `stellar` | `solana` | `monad` | `arc`.
   chain   String @default("stellar")
   /// The ACCOUNT this identity is attached to — not necessarily the key that
   /// signs for it. On Stellar a SEP-30 recovery re-keys the account and leaves

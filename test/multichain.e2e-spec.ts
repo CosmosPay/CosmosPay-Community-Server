@@ -7,7 +7,7 @@ import { AllExceptionsFilter } from '@/common/filters/all-exceptions.filter';
 import { PrismaService } from '@/prisma/prisma.service';
 
 /**
- * The HTTP wiring of Solana and Monad: the request DTOs hold an address to
+ * The HTTP wiring of Solana, Monad and Arc: the request DTOs hold an address to
  * the chain it names, refuse Stellar-only fields elsewhere, and an unknown
  * chain is a 400 — all before any RPC is called (none is reachable here).
  */
@@ -114,5 +114,65 @@ describe('Solana and Monad wiring (e2e)', () => {
     );
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('validation_failed');
+  });
+
+  describe('Arc', () => {
+    it('takes `arc` as a payment chain, holding the destination to an EVM address', async () => {
+      const res = await asTenant(
+        request(http()).post('/v1/payment-intents/pay'),
+      ).send({ chain: 'arc', destination: SOL_DEST, amount: '1' });
+      expect(res.status).toBe(400);
+      expect(JSON.stringify(res.body.message)).toContain(
+        'destination must be a valid Arc (EVM) address (0x + 40 hex) for chain arc',
+      );
+    });
+
+    it('refuses an open amount on Arc without deposit addresses, as on Monad', async () => {
+      const res = await asTenant(
+        request(http()).post('/v1/payment-intents/pay'),
+      ).send({ chain: 'arc', destination: EVM_DEST });
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('invalid_amount');
+      expect(res.body.message).toMatch(/amount is required on arc/);
+    });
+
+    it('refuses more decimals than USDC has before any node is asked', async () => {
+      const res = await asTenant(
+        request(http()).post('/v1/payment-intents/pay'),
+      ).send({ chain: 'arc', destination: EVM_DEST, amount: '1.0000001' });
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('invalid_amount');
+    });
+
+    it('refuses a same-chain swap on Arc: no swap route', async () => {
+      const res = await asTenant(request(http()).post('/v1/swaps/quote'))
+        .set('x-consumer-permissions', 'swaps:read')
+        .send({
+          chain: 'arc',
+          amount: '1',
+          sourceAssetCode: 'native',
+          destAssetCode: '0x3600000000000000000000000000000000000000',
+        });
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('validation_failed');
+    });
+
+    it('refuses Arc as a cross-chain swap network: the route does not reach it', async () => {
+      const res = await asTenant(
+        request(http()).post('/v1/cross-chain-swaps/quote'),
+      )
+        .set('x-consumer-permissions', 'swaps:read')
+        .send({
+          originChain: 'arc',
+          originAsset: 'USDC',
+          destinationChain: 'base',
+          destinationAsset: 'USDC',
+          amountIn: '1',
+          recipient: EVM_DEST,
+          refundTo: EVM_DEST,
+        });
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('validation_failed');
+    });
   });
 });

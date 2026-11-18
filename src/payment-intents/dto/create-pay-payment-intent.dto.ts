@@ -33,6 +33,8 @@ import {
  *   - Solana: a Solana Pay transfer request (`solana:<recipient>?...`) with a
  *     fresh `reference` key the payment is found by;
  *   - Monad: an EIP-681 URI (`ethereum:<payee>@143?value=...`);
+ *   - Arc: an EIP-681 `transfer` on its USDC (or another ERC-20)
+ *     (`ethereum:0x3600…@5042/transfer?address=<payee>&uint256=...`);
  *   - every other network (`PAYMENT_NETWORKS`): the hosted checkout, where the
  *     payer picks what to pay with and pays a deposit address made for that
  *     payment (`/v1/payment-links/{id}/deposits`).
@@ -40,7 +42,7 @@ import {
 @ApiSchema({
   description:
     'Request to create a `pay` intent: a payment link on any network payment ' +
-    'links settle on (`chain`). Stellar, Solana and Monad links are wallet ' +
+    'links settle on (`chain`). Stellar, Solana, Monad and Arc links are wallet ' +
     'links (SEP-7, Solana Pay, EIP-681); a link on any other network is the ' +
     'hosted checkout, paid through a deposit address made for each payment.',
 })
@@ -49,8 +51,8 @@ export class CreatePayPaymentIntentDto {
     enum: PAYMENT_NETWORKS,
     default: 'stellar',
     description:
-      'Network the payment settles on. Omit for Stellar. On Stellar, Solana ' +
-      'and Monad the network tier (mainnet or test network) is the one your ' +
+      'Network the payment settles on. Omit for Stellar. On Stellar, Solana, ' +
+      'Monad and Arc the network tier (mainnet or test network) is the one your ' +
       'API key is for. Every other network settles through a cross-chain ' +
       'payment: it needs an `amount` and takes no `callback` or ' +
       '`merchantFee`. With a `dev` key it settles in the sandbox, on the ' +
@@ -75,8 +77,9 @@ export class CreatePayPaymentIntentDto {
     description:
       'Amount the destination should receive, in the asset’s own units (XLM, ' +
       'SOL, MON, or the token). Omit to let the user enter it (e.g. ' +
-      'donations), except on Monad, where the amount is part of how the payment ' +
-      'is recognised, and on the networks paid through deposit addresses, ' +
+      'donations), except on Monad and Arc without deposit addresses, where the ' +
+      'amount is part of how the payment is recognised, and on the networks ' +
+      'paid through deposit addresses, ' +
       'where it is what the payment is quoted for. At most 7 decimals on ' +
       'Stellar; elsewhere, at most the asset’s own decimals.',
     example: '120.1234567',
@@ -90,7 +93,10 @@ export class CreatePayPaymentIntentDto {
     description:
       'Asset code the destination receives. Omit for the network’s coin (XLM, ' +
       'SOL, MON, ETH, BTC, ...). For a Solana or Monad token, the ticker it is ' +
-      'labelled with, alongside `assetIssuer`. On the networks paid through ' +
+      'labelled with, alongside `assetIssuer`. On Arc the coin is USDC, charged ' +
+      'through its ERC-20 contract (6 decimals): omit it, or name `USDC` or ' +
+      '`EURC` without `assetIssuer`; any other ERC-20 by `assetIssuer`, as on ' +
+      'Monad. On the networks paid through ' +
       'deposit addresses, a symbol the cross-chain route lists once on that ' +
       'network (`GET /v1/cross-chain-swaps/assets`), or name the token by ' +
       '`assetIssuer`.',
@@ -105,8 +111,8 @@ export class CreatePayPaymentIntentDto {
 
   @ApiPropertyOptional({
     description:
-      'Stellar: the issuer account. Solana: the SPL mint. Monad: the ERC-20 ' +
-      'contract. Any other network: the token’s `contract` as ' +
+      'Stellar: the issuer account. Solana: the SPL mint. Monad and Arc: the ERC-20 ' +
+      'contract (omit it on Arc for USDC and EURC). Any other network: the token’s `contract` as ' +
       '`GET /v1/cross-chain-swaps/assets` lists it. Omit for the network’s coin.',
     example: 'GCRCUE2C5TBNIPYHMEP7NK5RWTT2WBSZ75CMARH7GDOHDDCQH3XANFOB',
   })
@@ -129,7 +135,7 @@ export class CreatePayPaymentIntentDto {
   @ApiPropertyOptional({
     description:
       'Shown to the user in their wallet (≤ 300 chars): SEP-7 `msg` on ' +
-      'Stellar, the Solana Pay `message`. Not supported on Monad. On the ' +
+      'Stellar, the Solana Pay `message`. Not supported on Monad or Arc. On the ' +
       'networks paid through deposit addresses it is shown on the hosted ' +
       'checkout only.',
     example: 'pay me with lumens',
@@ -174,7 +180,7 @@ export class CreatePayPaymentIntentDto {
       '`POST /v1/payment-links/{id}/transaction` build the envelope with ' +
       'both payments. Solana: `uri` is a Solana Pay transaction request ' +
       '(`/v1/payment-links/{id}/solana-pay`); a SOL fee goes to an existing ' +
-      'account. Monad: needs deposit addresses (`merchant_fee_unsupported` ' +
+      'account. Monad and Arc: need deposit addresses (`merchant_fee_unsupported` ' +
       'without them); the deposit address pays the fee (PaymentSplitForwarder) ' +
       'and the link asks for the amount, plus the fee when the payer pays it. ' +
       'Not supported on the networks paid through deposit addresses ' +

@@ -535,11 +535,19 @@ describe('Payment intents CRUD (e2e)', () => {
       const byId = Object.fromEntries(
         res.body.data.map((n: { id: string }) => [n.id, n]),
       );
-      expect(res.body.data).toHaveLength(35);
+      expect(res.body.data).toHaveLength(36);
       expect(byId.stellar).toMatchObject({
         network: 'testnet',
         available: true,
         settlesThroughDeposits: false,
+      });
+      // Arc Testnet is a real test network: a dev key pays Arc links natively.
+      expect(byId.arc).toMatchObject({
+        name: 'Arc',
+        network: 'testnet',
+        available: true,
+        settlesThroughDeposits: false,
+        asset: null,
       });
       expect(byId.base).toMatchObject({
         network: 'testnet',
