@@ -7,7 +7,6 @@ import { parseUnits } from '@/chains/units';
 import type { StellarNetwork } from '@/config/configuration';
 import { addressTopic, topicAddress } from '@/evm/eip681';
 import {
-  ERC20_TRANSFER_SELECTOR,
   ERC20_TRANSFER_TOPIC,
   EVM_LOG_SCAN_MAX_CALLS,
   EVM_NATIVE_TOKEN_INTERFACES,
@@ -61,6 +60,13 @@ import type {
  *     a micro-USDC dropped, as `balanceOf` drops it) and compared with the
  *     intent's amount: either way of paying settles, and no payment counts
  *     twice. A value transfer is then found by the observer too.
+ *
+ * A reverted transaction is a plain mismatch here, never `failedOnChain`: it
+ * carries nothing that binds it to one intent (no memo, no reference; payee,
+ * token and amount are public), so anyone could revert a `transfer(payTo,
+ * amount)` from an empty account for the price of gas, have the hash reach
+ * `validate`, and turn the intent FAILED, which is terminal. Only Stellar
+ * (memo) and Solana (reference) can tie a failed transaction to an intent.
  */
 @Injectable()
 export class EvmVerifierService implements PaymentVerifier {
@@ -79,6 +85,11 @@ export class EvmVerifierService implements PaymentVerifier {
     if (!tx || !receipt) {
       return { valid: false, reason: 'Transaction not found on-chain' };
     }
+    // Before any match: a reverted transaction moved nothing, so it never
+    // settles, and it never fails the intent either (see the class comment).
+    if (receipt.status !== '0x1') {
+      return { valid: false, reason: 'Transaction failed on-chain' };
+    }
 
     const expected = this.expected(chain, intent);
     if (expected === null && !isDeposit(intent)) {
@@ -87,7 +98,7 @@ export class EvmVerifierService implements PaymentVerifier {
     const accepts = amountRule(intent, expected);
 
     const paysIntent = intent.assetIssuer
-      ? this.erc20Pays(chain, intent, tx, receipt, accepts)
+      ? this.erc20Pays(chain, intent, receipt, accepts)
       : this.nativePays(chain, intent, tx, accepts);
     if (!paysIntent) {
       return {
@@ -112,13 +123,6 @@ export class EvmVerifierService implements PaymentVerifier {
       };
     }
 
-    if (receipt.status !== '0x1') {
-      return {
-        valid: false,
-        failedOnChain: true,
-        reason: 'Transaction failed on-chain',
-      };
-    }
     return {
       valid: true,
       txHash: hash.toLowerCase(),
@@ -229,6 +233,7 @@ export class EvmVerifierService implements PaymentVerifier {
     }
   }
 
+  /** A successful value transfer to the payee for the amount (checked by the caller: status `0x1`). */
   private nativePays(
     chain: EvmChain,
     intent: PaymentIntent,
@@ -242,17 +247,14 @@ export class EvmVerifierService implements PaymentVerifier {
   }
 
   /**
-   * A `Transfer` log of the token to the destination for the amount — or, for
-   * a reverted transaction, which emits no logs, the `transfer(to, amount)`
-   * call to the token itself, so the payer's own failed attempt is recognised.
-   * For a chain's gas coin seen as an ERC-20 (Arc's USDC) the log is the
-   * system emitter's instead, never the token's (see the class comment), and a
-   * reverted value transfer to the payee is recognised too.
+   * A `Transfer` log of the token to the destination for the amount, in a
+   * successful receipt (a reverted one emits no logs, and the caller refuses
+   * it first). For a chain's gas coin seen as an ERC-20 (Arc's USDC) the log is
+   * the system emitter's instead, never the token's (see the class comment).
    */
   private erc20Pays(
     chain: EvmChain,
     intent: PaymentIntent,
-    tx: EvmTransaction,
     receipt: EvmReceipt,
     accepts: (value: bigint | null) => boolean,
   ): boolean {
@@ -261,25 +263,12 @@ export class EvmVerifierService implements PaymentVerifier {
     const destination = addressTopic(payTo);
     const gasCoin = gasCoinOf(chain, token);
     const emitter = gasCoin?.transferEmitter.toLowerCase() ?? token;
-    const logged = receipt.logs.some(
+    return receipt.logs.some(
       (log) =>
         log.address.toLowerCase() === emitter &&
         log.topics[0] === ERC20_TRANSFER_TOPIC &&
         log.topics[2]?.toLowerCase() === destination &&
         accepts(loggedAmount(chain, gasCoin, log.data)),
-    );
-    if (logged) return true;
-    if (receipt.status === '0x1') return false;
-    const to = tx.to?.toLowerCase();
-    if (gasCoin && to === payTo) {
-      return accepts(loggedAmount(chain, gasCoin, tx.value));
-    }
-    if (to !== token) return false;
-    const input = tx.input.toLowerCase();
-    return (
-      input.startsWith(ERC20_TRANSFER_SELECTOR) &&
-      `0x${input.slice(10, 74)}` === destination &&
-      accepts(safeBigInt(`0x${input.slice(74, 138)}`))
     );
   }
 }

@@ -534,6 +534,7 @@ Deux chemins utilisent cette règle unique :
   hash hexadécimal de 64 caractères, il est stocké en minuscules, et il n'est unique que
   parmi les intentions du consumer appelant (`409 idempotency_conflict` en cas de collision
   avec une autre des siennes).
+  Sur Monad et Arc, une transaction échouée est toujours une non-correspondance : elle ne porte ni mémo ni référence qui la lie à l'intention, et ne la marque donc jamais `FAILED`.
 - **Automatique (observateur permanent) :** `PaymentIntentObserverService` interroge Horizon
   toutes les `OBSERVER_INTERVAL_MS` à la recherche d'intentions `PENDING` — par le
   `txHash` déclaré, ou en parcourant les paiements vers la destination — et finalise les
@@ -2675,6 +2676,7 @@ plugins isolés.
 - **Pas de migration :** les chaînes sont enregistrées comme texte, et les adresses de dépôt d'Arc vont dans `evm_deposit_address` à côté de celles de Monad (`chain = 'arc'`).
 - **Nouvelles variables, toutes optionnelles :** `ARC_RPC_URL_MAINNET`, `ARC_RPC_URL_TESTNET`, `ARC_RPC_TIMEOUT_MS`, `ARC_LOG_BLOCK_RANGE`, `ARC_RELAYER_PRIVATE_KEY`, `ARC_DEPOSIT_TOKEN_FEES`. Sans la clé du relayer, les liens sur Arc paient directement le marchand et exigent un montant ; avec elle, alimentez son adresse en USDC sur chaque niveau (voir la section Arc).
 - **Pas sur Arc :** swaps sur une même chaîne et inter-chaînes, paiements depuis d'autres réseaux, USDT0, paiements protégés, paiements privés et le sandbox. Les routes de swap refusent `arc` à la validation.
+- **Monad : une transaction annulée ne fait plus échouer une intention.** `POST /v1/payment-intents/{id}/validate` marquait `FAILED` une intention Monad sur une transaction annulée qui appelait `transfer(payee, amount)` sur le jeton ou envoyait le montant au bénéficiaire. Une telle transaction ne porte rien de l'intention, donc n'importe qui pouvait faire passer une intention en `FAILED` (état final) pour le prix du gas. Sur Monad et Arc, c'est désormais une simple non-correspondance (`valid: false`, statut inchangé) ; Stellar et Solana, où le mémo ou la référence la lient, ne changent pas.
 
 ### Liens de paiement : un sandbox pour les réseaux de test
 

@@ -562,6 +562,13 @@ Each of these was a real finding in this codebase, not a hypothetical:
   their deposits and read its USDT0 transfers, and a production key read its test-network
   private payments, until they did. Another network's row is the 404 of a missing one. A new
   by-id lookup of a network-scoped row takes the network too.
+- **`FAILED` needs a failed transaction that is bound to the intent.** Only Stellar
+  (memo) and Solana (reference) report `failedOnChain`. A reverted EVM transaction
+  carries nothing of the intent's (payee, token and amount are public), so anyone
+  could revert a `transfer(payee, amount)` for the price of gas and, through
+  `validate`, make the intent `FAILED`, which is final: `EvmVerifierService` checks
+  the receipt's status before any match and answers a reverted one as a plain
+  mismatch, on Monad and Arc alike.
 - **A route whose cost an error cannot refund — XLM spent, an account created
   on-chain — carries `@RateLimit`.**
 - **A submit route relays only a transaction this service built, for the same

@@ -1516,7 +1516,10 @@ export class PaymentIntentsService {
     // This intent's own payment failed on-chain → settle as FAILED. The verifier
     // only says so once memo, age and a payment operation all match: FAILED is
     // terminal, and the hash of any unrelated failed transaction used to reach
-    // it. Everything else is a mismatch and changes nothing.
+    // it. Everything else is a mismatch and changes nothing. Only Stellar
+    // (memo) and Solana (reference) ever report it: an EVM transaction carries
+    // nothing that ties a reverted one to this intent, so on Monad and Arc a
+    // failed transaction is a plain mismatch (see `EvmVerifierService`).
     //
     // Only from a status that may still fail. An EXPIRED intent is worth
     // validating now — a verified payment settles it — and a failed attempt

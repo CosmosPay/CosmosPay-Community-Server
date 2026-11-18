@@ -16,7 +16,8 @@ export interface VerificationResult {
    * The transaction is this intent's payment — it carries the intent's
    * identifier (Stellar memo, Solana reference) and pays its destination — but
    * it failed on-chain. Only this may settle an intent as FAILED; every other
-   * invalid result is a mismatch.
+   * invalid result is a mismatch. The EVM verifier never reports it: a
+   * reverted EVM transaction has no identifier binding it to one intent.
    */
   failedOnChain?: boolean;
   /**

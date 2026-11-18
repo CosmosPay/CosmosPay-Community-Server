@@ -210,27 +210,28 @@ describe('EvmVerifierService on Arc: verifyByHash', () => {
     expect((await verifier.verifyByHash(intent(), HASH)).valid).toBe(false);
   });
 
-  it('recognises the payer’s reverted attempt, either way of paying, as failedOnChain', async () => {
+  it('answers a reverted attempt, either way of paying, as a plain mismatch, never failedOnChain', async () => {
+    // Nothing in a reverted EVM transaction is this intent's: anyone could
+    // revert one for the price of gas and make the intent FAILED.
     const input =
       ERC20_TRANSFER_SELECTOR +
       addressTopic(DEST).slice(2) +
       word(9_409_212n).slice(2);
-    const { verifier } = make({
-      tx: tx({ input }),
-      receipt: receipt([], '0x0'),
-    });
-    await expect(verifier.verifyByHash(intent(), HASH)).resolves.toMatchObject({
-      valid: false,
-      failedOnChain: true,
-    });
-    const { verifier: native } = make({
-      tx: tx({ to: DEST.toLowerCase(), value: word(9_409_212n * MICRO) }),
-      receipt: receipt([], '0x0'),
-    });
-    await expect(native.verifyByHash(intent(), HASH)).resolves.toMatchObject({
-      valid: false,
-      failedOnChain: true,
-    });
+    for (const reverted of [
+      tx({ input }),
+      tx({ to: DEST.toLowerCase(), value: word(9_409_212n * MICRO) }),
+    ]) {
+      const { verifier } = make({
+        tx: reverted,
+        receipt: receipt([], '0x0'),
+      });
+      const result = await verifier.verifyByHash(intent(), HASH);
+      expect(result).toEqual({
+        valid: false,
+        reason: 'Transaction failed on-chain',
+      });
+      expect(result.failedOnChain).toBeUndefined();
+    }
   });
 
   it('with a deposit address: the emitter log to it, at or above the amount', async () => {

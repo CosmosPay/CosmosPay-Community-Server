@@ -533,6 +533,7 @@ Two paths use that single rule:
   on its own: it must be a 64-character hex hash, is stored lowercase, and is
   unique only among the calling consumer's intents (`409 idempotency_conflict`
   on a clash with another of them).
+  On Monad and Arc a failed transaction is always a mismatch: it carries no memo or reference that ties it to the intent, so it never marks one `FAILED`.
 - **Automatic (permanent observer):** `PaymentIntentObserverService` polls Horizon
   every `OBSERVER_INTERVAL_MS` for `PENDING` intents — by reported `txHash`, or by
   scanning payments to the destination — and finalizes matches the same way, so
@@ -2582,6 +2583,7 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
 - **No migration:** chains are stored as text, and Arc's deposit addresses go into `evm_deposit_address` beside Monad's (`chain = 'arc'`).
 - **New variables, all optional:** `ARC_RPC_URL_MAINNET`, `ARC_RPC_URL_TESTNET`, `ARC_RPC_TIMEOUT_MS`, `ARC_LOG_BLOCK_RANGE`, `ARC_RELAYER_PRIVATE_KEY`, `ARC_DEPOSIT_TOKEN_FEES`. Without the relayer key Arc links pay the merchant directly and need an amount; with it, fund its address with USDC on each tier (see the Arc section).
 - **Not on Arc:** same-chain and cross-chain swaps, payments from other networks, USDT0, protected payments, private payments and the sandbox. The swap routes refuse `arc` in validation.
+- **Monad: a reverted transaction no longer fails an intent.** `POST /v1/payment-intents/{id}/validate` used to mark a Monad intent `FAILED` on a reverted transaction that called `transfer(payee, amount)` on the token or sent the amount to the payee. Such a transaction carries nothing of the intent's, so anyone could make an intent `FAILED` (which is final) for the price of gas. On Monad and Arc it is now a plain mismatch (`valid: false`, status unchanged); Stellar and Solana, where the memo or the reference binds it, are unchanged.
 
 ### Payment links: a sandbox for the test networks
 

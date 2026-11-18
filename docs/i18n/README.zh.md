@@ -459,6 +459,7 @@ platform 的 `COSMOS_API_URL`，用逗号分隔，然后在那里运行 `npm run
 有两条路径使用这同一条规则：
 
 - **手动：** `POST /v1/payment-intents/:id/validate`，请求体为 `{ "txHash": "<64-hex>" }`。匹配时，意图被置为 `SUCCEEDED`（并保存 `txHash`），同时触发 `PAYMENT_INTENT_SUCCEEDED` webhook。链上失败的交易**只有在它确实是该意图自己的支付时**——memo、目标地址和资产均相同——才会把意图标记为 `FAILED`。其他任何交易，无论失败与否，都属于不匹配，状态保持不变，以便仍可提交正确的交易。通过 `PATCH /v1/payment-intents/:id` 上报的 `txHash` 永远不会单凭自己结算一个意图：它必须是一个 64 字符的十六进制哈希，会以小写形式存储，并且只在发起调用的消费者自己的意图范围内保持唯一（与该消费者另一个意图冲突时返回 `409 idempotency_conflict`）。
+  在 Monad 和 Arc 上，失败的交易一律视为不匹配：它不带任何把它绑定到该意图的 memo 或 reference，因此永远不会把意图标记为 `FAILED`。
 - **自动（常驻观察器）：** `PaymentIntentObserverService` 每隔 `OBSERVER_INTERVAL_MS` 轮询一次 Horizon，查找 `PENDING` 状态的意图——按上报的 `txHash`，或扫描发往目标地址的支付——并以同样的方式终结匹配的意图，因此状态会变化、事件会触发，**无需任何人调用 API**。每个周期对每个消费者最多处理 `OBSERVER_MAX_INTENTS_PER_CONSUMER`（10）个意图，且从不扫描已过期的意图，因此单个消费者无法拖慢其他所有人的结算。本地开发时可用 `OBSERVER_ENABLED=false` 关闭。
 
 **过期检查会先查链。** 一个已超过生命周期的意图在被标记为 `EXPIRED` 之前会再验证一次：如果它的支付已经上链，就改为结算为 `SUCCEEDED`；如果无法连接 Horizon，就留给下一个周期处理。当该笔支付的哈希已经存在于同一个消费者的另一个意图上时，该意图会被置为过期，而不是无休止地重试。在过期*之后*才被验证的支付——无论是被观察器还是被 `validate`——仍会把一个 `EXPIRED` 的意图变为 `SUCCEEDED` 并触发 `PAYMENT_INTENT_SUCCEEDED`，因此请不要把 `EXPIRED` 当作最终状态。该扫描会回溯读取目标地址自意图创建以来的所有支付，最多 1,000 条（5 页，每页 200 条）；如果某个目标地址在一个意图的生命周期内收到的支付超过这个数量，请改用 `validate` 并携带哈希。
@@ -1747,6 +1748,7 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 - **无需迁移：** 链以文本存储，Arc 的充值地址与 Monad 的一起存入 `evm_deposit_address`（`chain = 'arc'`）。
 - **新变量，均为可选：** `ARC_RPC_URL_MAINNET`、`ARC_RPC_URL_TESTNET`、`ARC_RPC_TIMEOUT_MS`、`ARC_LOG_BLOCK_RANGE`、`ARC_RELAYER_PRIVATE_KEY`、`ARC_DEPOSIT_TOKEN_FEES`。没有 relayer 密钥时，Arc 链接直接付款给商户且必须指定金额；有密钥时，请在每个层级为其地址充值 USDC（见 Arc 一节）。
 - **Arc 不支持：** 同链兑换和跨链兑换、来自其他网络的付款、USDT0、受保护付款、私密付款以及沙盒。兑换路由在校验时拒绝 `arc`。
+- **Monad：回滚的交易不再使意图失败。** `POST /v1/payment-intents/{id}/validate` 过去会在一笔回滚交易调用了代币的 `transfer(payee, amount)` 或向收款方发送了该金额时，把 Monad 意图标记为 `FAILED`。这样的交易不带任何属于该意图的内容，因此任何人只需付 gas 就能把意图变成 `FAILED`（终态）。现在在 Monad 和 Arc 上它只是普通的不匹配（`valid: false`，状态不变）；由 memo 或 reference 绑定的 Stellar 和 Solana 不变。
 
 ### 支付链接：测试网沙盒
 

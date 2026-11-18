@@ -538,6 +538,7 @@ Zwei Pfade nutzen diese eine Regel:
   von sich aus: Er muss ein 64-stelliger Hex-Hash sein, wird kleingeschrieben
   gespeichert und ist nur unter den Intents des aufrufenden Consumers eindeutig
   (`409 idempotency_conflict` bei einer Kollision mit einem anderen davon).
+  Auf Monad und Arc ist eine fehlgeschlagene Transaktion immer eine Abweichung: sie trägt kein Memo und keine Referenz, die sie an die Zahlungsabsicht bindet, und markiert sie daher nie `FAILED`.
 - **Automatisch (permanenter Observer):** `PaymentIntentObserverService` fragt Horizon alle
   `OBSERVER_INTERVAL_MS` nach `PENDING`-Intents ab — über den gemeldeten `txHash` oder
   durch Durchsuchen der Zahlungen an die Zieladresse — und finalisiert Treffer auf
@@ -2732,6 +2733,7 @@ eingeschaltet werden.
 - **Keine Migration:** Chains werden als Text gespeichert, und die Einzahlungsadressen von Arc landen in `evm_deposit_address` neben denen von Monad (`chain = 'arc'`).
 - **Neue Variablen, alle optional:** `ARC_RPC_URL_MAINNET`, `ARC_RPC_URL_TESTNET`, `ARC_RPC_TIMEOUT_MS`, `ARC_LOG_BLOCK_RANGE`, `ARC_RELAYER_PRIVATE_KEY`, `ARC_DEPOSIT_TOKEN_FEES`. Ohne den Relayer-Schlüssel bezahlen Arc-Links den Händler direkt und brauchen einen Betrag; mit ihm finanzieren Sie seine Adresse auf jeder Stufe mit USDC (siehe den Arc-Abschnitt).
 - **Nicht auf Arc:** Swaps innerhalb einer Chain und chainübergreifend, Zahlungen aus anderen Netzwerken, USDT0, geschützte Zahlungen, private Zahlungen und die Sandbox. Die Swap-Routen lehnen `arc` bei der Validierung ab.
+- **Monad: eine zurückgesetzte Transaktion lässt eine Zahlungsabsicht nicht mehr scheitern.** `POST /v1/payment-intents/{id}/validate` markierte eine Monad-Zahlungsabsicht als `FAILED`, wenn eine zurückgesetzte Transaktion `transfer(payee, amount)` auf dem Token aufrief oder den Betrag an den Empfänger sandte. Eine solche Transaktion trägt nichts von der Zahlungsabsicht, also konnte jeder eine Zahlungsabsicht für den Preis des Gases auf `FAILED` (endgültig) setzen. Auf Monad und Arc ist sie jetzt eine einfache Abweichung (`valid: false`, Status unverändert); Stellar und Solana, wo Memo oder Referenz sie binden, bleiben unverändert.
 
 ### Zahlungslinks: eine Sandbox für die Testnetze
 

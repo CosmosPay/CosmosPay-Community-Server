@@ -536,6 +536,7 @@ Dos caminos usan esa única regla:
   por sí solo: debe ser un hash hex de 64 caracteres, se guarda en minúsculas, y es
   único solo entre las intenciones del consumidor que llama (`409
   idempotency_conflict` ante un choque con otra de las suyas).
+  En Monad y Arc una transacción fallida es siempre una discrepancia: no lleva memo ni referencia que la ate a la intención, así que nunca la marca `FAILED`.
 - **Automático (observador permanente):** `PaymentIntentObserverService` consulta Horizon
   cada `OBSERVER_INTERVAL_MS` en busca de intenciones `PENDING` — por el `txHash`
   reportado, o recorriendo los pagos al destino — y finaliza las coincidencias de la
@@ -2679,6 +2680,7 @@ misma lista `PLUGINS_ENABLED` que los plugins aislados.
 - **Sin migración:** las cadenas se guardan como texto, y las direcciones de depósito de Arc van a `evm_deposit_address` junto a las de Monad (`chain = 'arc'`).
 - **Variables nuevas, todas opcionales:** `ARC_RPC_URL_MAINNET`, `ARC_RPC_URL_TESTNET`, `ARC_RPC_TIMEOUT_MS`, `ARC_LOG_BLOCK_RANGE`, `ARC_RELAYER_PRIVATE_KEY`, `ARC_DEPOSIT_TOKEN_FEES`. Sin la clave del relayer, los enlaces en Arc pagan directamente al comercio y necesitan un monto; con ella, financia su dirección con USDC en cada nivel (ver la sección de Arc).
 - **No disponible en Arc:** swaps en la misma cadena y entre redes, pagos desde otras redes, USDT0, pagos protegidos, pagos privados y el sandbox. Las rutas de swaps rechazan `arc` en la validación.
+- **Monad: una transacción revertida ya no hace fallar una intención.** `POST /v1/payment-intents/{id}/validate` marcaba `FAILED` una intención en Monad ante una transacción revertida que llamaba a `transfer(payee, amount)` en el token o enviaba el monto al beneficiario. Una transacción así no lleva nada de la intención, así que cualquiera podía dejar una intención en `FAILED` (que es final) por el precio del gas. En Monad y Arc ahora es una simple discrepancia (`valid: false`, el estado no cambia); Stellar y Solana, donde el memo o la referencia la atan, no cambian.
 
 ### Enlaces de pago: un sandbox para las redes de prueba
 

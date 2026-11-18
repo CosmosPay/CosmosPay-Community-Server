@@ -530,6 +530,7 @@ rolling deploy के दौरान पुराने और नए replicas 
   करता: यह 64-अक्षर का hex hash होना चाहिए, lowercase में सहेजा जाता है, और यह सिर्फ़ कॉल
   करने वाले consumer के intents में unique होता है (उनमें से किसी दूसरे से टकराने पर `409
   idempotency_conflict`)।
+  Monad और Arc पर failed transaction हमेशा mismatch होता है: उसमें कोई memo या reference नहीं होता जो उसे intent से जोड़े, इसलिए वह intent को कभी `FAILED` नहीं करता।
 - **स्वचालित (स्थायी observer):** `PaymentIntentObserverService` हर
   `OBSERVER_INTERVAL_MS` पर `PENDING` intents के लिए Horizon को poll करता है — रिपोर्ट किए गए `txHash` से, या
   destination पर आए पेमेंट scan करके — और मेल खाने वालों को उसी तरह finalize करता है, इसलिए
@@ -2570,6 +2571,7 @@ seal होती हैं और कभी लौटाई नहीं जा
 - **कोई migration नहीं:** chains text के रूप में store होती हैं, और Arc के deposit addresses Monad के साथ `evm_deposit_address` में जाते हैं (`chain = 'arc'`)।
 - **नए variables, सभी वैकल्पिक:** `ARC_RPC_URL_MAINNET`, `ARC_RPC_URL_TESTNET`, `ARC_RPC_TIMEOUT_MS`, `ARC_LOG_BLOCK_RANGE`, `ARC_RELAYER_PRIVATE_KEY`, `ARC_DEPOSIT_TOKEN_FEES`। Relayer key के बिना Arc links सीधे merchant को pay करते हैं और amount चाहिए; key के साथ, हर tier पर उसके address को USDC से fund करें (Arc वाला section देखें)।
 - **Arc पर नहीं:** एक ही chain के और cross-chain swaps, दूसरे networks से भुगतान, USDT0, protected payments, private payments और sandbox। Swap routes validation में `arc` को refuse करते हैं।
+- **Monad: reverted transaction अब intent को fail नहीं करता।** `POST /v1/payment-intents/{id}/validate` पहले किसी Monad intent को `FAILED` कर देता था, जब कोई reverted transaction token पर `transfer(payee, amount)` call करता था या amount payee को भेजता था। ऐसे transaction में intent का कुछ भी नहीं होता, इसलिए कोई भी सिर्फ़ gas की क़ीमत पर intent को `FAILED` (जो final है) कर सकता था। Monad और Arc पर अब यह साधारण mismatch है (`valid: false`, status नहीं बदलता); Stellar और Solana, जहाँ memo या reference उसे बाँधते हैं, नहीं बदलते।
 
 ### Payment links: test networks के लिए sandbox
 

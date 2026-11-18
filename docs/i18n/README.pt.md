@@ -535,6 +535,7 @@ Dois caminhos usam essa regra única:
   intent sozinho: precisa ser um hash hex de 64 caracteres, é armazenado em
   minúsculas e é único apenas entre os intents do consumer que chama
   (`409 idempotency_conflict` em caso de colisão com outro intent dele).
+  Na Monad e na Arc uma transação que falhou é sempre uma divergência: não leva memo nem referência que a ligue à intenção, então nunca a marca `FAILED`.
 - **Automático (observer permanente):** `PaymentIntentObserverService` consulta o Horizon
   a cada `OBSERVER_INTERVAL_MS` em busca de intents `PENDING` — pelo `txHash`
   informado, ou varrendo os pagamentos para o destino — e finaliza as
@@ -2643,6 +2644,7 @@ serviço em `src/native-plugins/<slug>/`, ligados pela mesma lista
 - **Sem migração:** as redes são guardadas como texto, e os endereços de depósito da Arc vão para `evm_deposit_address` ao lado dos da Monad (`chain = 'arc'`).
 - **Variáveis novas, todas opcionais:** `ARC_RPC_URL_MAINNET`, `ARC_RPC_URL_TESTNET`, `ARC_RPC_TIMEOUT_MS`, `ARC_LOG_BLOCK_RANGE`, `ARC_RELAYER_PRIVATE_KEY`, `ARC_DEPOSIT_TOKEN_FEES`. Sem a chave do relayer, os links em Arc pagam o comerciante diretamente e precisam de um valor; com ela, financie o seu endereço com USDC em cada nível (veja a seção da Arc).
 - **Fora da Arc:** swaps na mesma rede e entre redes, pagamentos a partir de outras redes, USDT0, pagamentos protegidos, pagamentos privados e o sandbox. As rotas de swaps recusam `arc` na validação.
+- **Monad: uma transação revertida não faz mais uma intenção falhar.** `POST /v1/payment-intents/{id}/validate` marcava `FAILED` uma intenção na Monad diante de uma transação revertida que chamava `transfer(payee, amount)` no token ou enviava o valor ao beneficiário. Uma transação assim não leva nada da intenção, então qualquer um podia deixar uma intenção em `FAILED` (que é final) pelo preço do gas. Na Monad e na Arc agora é uma simples divergência (`valid: false`, o status não muda); Stellar e Solana, onde o memo ou a referência a ligam, não mudam.
 
 ### Links de pagamento: um sandbox para as redes de testes
 
