@@ -98,6 +98,9 @@ src/
                                   build + relay the Soroban `send`, status from the ledger and LayerZero Scan
   zk-payments/                    private payments: confidential transfers on Cosmos Pay's token, verified on-chain;
                                   the confidential token SDK is loaded only by confidential-sdk.ts
+  p2p/                            the P2P market on Cosmos Pay's P2PMarket contract (EVM networks): accounts,
+                                  payment methods, offers, matching, orders, charges and the keyless
+                                  /v1/p2p-checkout, payouts, transaction builder, matcher, indexer, expiry job
   liquidity-pools/                AMM deposit/withdraw, pool + position reads, cost basis + commission on gain
   observer/                       background reconciler: swaps + LP ops against Horizon, one adapter per table
   webhooks/                       webhook endpoints CRUD + dispatcher (HMAC-signed, retried)
@@ -133,11 +136,14 @@ prisma/schema.prisma              Consumer, PaymentIntent, Swap, ChainSwap, Cros
                                   PluginInstallation, PluginRecord
                                   ProtectedPayment, ProtectedPaymentTransaction
                                   OnrampP2pSession
+                                  P2pAccount, P2pAccountChallenge, P2pPaymentMethod, P2pOffer, P2pQuote,
+                                  P2pOrder, P2pCharge, P2pPayoutBatch, P2pMatcherTx, P2pChainCursor
 test/                             e2e suites: gateway gate, admin + alias console gates,
                                   payment intents, swaps, liquidity pools, KYC, webhooks
 plugins/                          THE plugins folder: one <slug>/ per plugin (plugin.json, index.ts, signature.json)
 scripts/                          OpenAPI generator, README check, operator scripts,
                                   zk/: deploy and check the private payments token on testnet
+                                  p2p/: deploy or verify the P2P market contract, check its token table
 contracts/                        PaymentForwarder.sol — Monad deposit addresses (npm run contracts:compile)
 deploy/authentik/                 Authentik blueprint: the wallet sign-in and sign-up
 docs/i18n/                        this README in es, pt, de, fr, hi, zh
@@ -207,6 +213,10 @@ console chega até ela. Os caminhos usam a forma `{param}` do OpenAPI.
 | GET | `/v1/admin/consumers` | console da plataforma |  |
 | GET | `/v1/admin/cross-chain-swaps` | console da plataforma |  |
 | GET | `/v1/admin/customers` | console da plataforma |  |
+| GET | `/v1/admin/p2p/disputes` | console da plataforma |  |
+| GET | `/v1/admin/p2p/orders/{id}` | console da plataforma |  |
+| POST | `/v1/admin/p2p/orders/{id}/resolution` | console da plataforma |  |
+| PATCH | `/v1/admin/p2p/merchants/{accountId}` | console da plataforma |  |
 | GET | `/v1/admin/payins` | console da plataforma |  |
 | GET | `/v1/admin/payment-intents` | console da plataforma |  |
 | GET | `/v1/admin/payouts` | console da plataforma |  |
@@ -316,6 +326,44 @@ console chega até ela. Os caminhos usam a forma `{param}` do OpenAPI.
 | GET | `/v1/onramp/receivers/{receiverId}/virtual-accounts` | `onramp:read` |  |
 | POST | `/v1/onramp/receivers/{receiverId}/virtual-accounts` | `onramp:write` |  |
 | POST | `/v1/onramp/trustline` | `onramp:write` |  |
+| GET | `/v1/p2p-checkout/charges/{id}` | nenhum, `@Public()`, orçamento por endereço de cliente |  |
+| POST | `/v1/p2p-checkout/charges/{id}/orders` | nenhum, `@Public()`, orçamento por endereço de cliente |  |
+| GET | `/v1/p2p-checkout/orders/{id}` | nenhum, `@Public()`, orçamento por endereço de cliente |  |
+| POST | `/v1/p2p-checkout/orders/{id}/cancel` | nenhum, `@Public()`, orçamento por endereço de cliente |  |
+| POST | `/v1/p2p-checkout/orders/{id}/paid` | nenhum, `@Public()`, orçamento por endereço de cliente |  |
+| GET | `/v1/p2p/accounts` | `p2p:read` |  |
+| POST | `/v1/p2p/accounts` | `p2p:write` |  |
+| POST | `/v1/p2p/accounts/challenge` | `p2p:write` |  |
+| GET | `/v1/p2p/accounts/{id}` | `p2p:read` |  |
+| PATCH | `/v1/p2p/accounts/{id}` | `p2p:write` |  |
+| DELETE | `/v1/p2p/accounts/{id}` | `p2p:write` |  |
+| GET | `/v1/p2p/charges` | `p2p:read` |  |
+| POST | `/v1/p2p/charges` | `p2p:write` |  |
+| GET | `/v1/p2p/charges/{id}` | `p2p:read` |  |
+| DELETE | `/v1/p2p/charges/{id}` | `p2p:write` |  |
+| GET | `/v1/p2p/market` | `p2p:read` |  |
+| GET | `/v1/p2p/merchant/orders` | `p2p:read` |  |
+| GET | `/v1/p2p/merchant/orders/{id}` | `p2p:read` |  |
+| POST | `/v1/p2p/merchant/transfer-matches` | `p2p:read` |  |
+| GET | `/v1/p2p/offers` | `p2p:read` |  |
+| POST | `/v1/p2p/offers` | `p2p:write` |  |
+| PATCH | `/v1/p2p/offers/{id}` | `p2p:write` |  |
+| DELETE | `/v1/p2p/offers/{id}` | `p2p:write` |  |
+| GET | `/v1/p2p/orders` | `p2p:read` |  |
+| POST | `/v1/p2p/orders` | `p2p:write` |  |
+| GET | `/v1/p2p/orders/{id}` | `p2p:read` |  |
+| POST | `/v1/p2p/orders/{id}/cancel` | `p2p:write` |  |
+| POST | `/v1/p2p/orders/{id}/dispute` | `p2p:write` |  |
+| POST | `/v1/p2p/orders/{id}/paid` | `p2p:write` |  |
+| GET | `/v1/p2p/payment-methods` | `p2p:read` |  |
+| POST | `/v1/p2p/payment-methods` | `p2p:write` |  |
+| PATCH | `/v1/p2p/payment-methods/{id}` | `p2p:write` |  |
+| DELETE | `/v1/p2p/payment-methods/{id}` | `p2p:write` |  |
+| GET | `/v1/p2p/payouts` | `p2p:read` |  |
+| POST | `/v1/p2p/payouts` | `p2p:write` |  |
+| GET | `/v1/p2p/payouts/{id}` | `p2p:read` |  |
+| POST | `/v1/p2p/quotes` | `p2p:write` |  |
+| POST | `/v1/p2p/transactions` | `p2p:write` |  |
 | GET | `/v1/payment-intents` | `payments:read` |  |
 | GET | `/v1/payment-intents/networks` | `payments:read` | ✓ |
 | POST | `/v1/payment-intents/pay` | `payments:write` | ✓ |
@@ -2353,6 +2401,83 @@ Um vendedor cobra um valor em moeda local com um QR, e quem paga o paga com um m
 - **Passos do operador.** O mercado registra o webhook por Client ID, por e-mail para o mesmo endereço que emite os ids de integrador: envie o Client ID e a URL `https://api.cosmospay.lat/cosmos-api/v1/onramp/p2p/webhooks` (o prefixo público do gateway, seguido de `/v1/onramp/p2p/webhooks`). O gateway precisa de uma rota sem chave para exatamente `POST /v1/onramp/p2p/webhooks` que repasse o corpo sem alterações; as rotas de quem paga não precisam de nada novo.
 - **Fora desta versão:** um evento de webhook de saída quando uma solicitação é paga, uma visão das solicitações no dashboard, e QRs reutilizáveis em que quem paga digita o valor.
 
+## Mercado P2P
+
+Stablecoins trocadas por moeda local entre pessoas e comerciantes, com os tokens bloqueados no contrato próprio da Cosmos Pay (`contracts/P2PMarket.sol`, uma implantação por rede EVM e nível) até que a parte que recebe a moeda local confirme que ela chegou. É um módulo do core (`src/p2p/`), separado do on-ramp P2P acima: sem um marketplace externo no meio, e com uma API pública para comerciantes, seus bots e os clientes que integram compra e venda nos próprios apps. Funciona em toda rede EVM em que o operador implantou o contrato, conforme a configuração: `GET /v1/p2p/market` lista essas redes para o nível da chave, e `src/p2p/p2p-networks.ts` diz em quais redes e com quais stablecoins ele pode funcionar. Cada rede traz também sua moeda, seu explorador e um nó público que uma carteira pode adicionar (`wallet_addEthereumChain`), tirados de constantes públicas, nunca do nó pelo qual o serviço lê.
+
+### Como funciona uma negociação
+
+- **A pessoa digita um valor; o mercado escolhe o comerciante.** `POST /v1/p2p/quotes` classifica as ofertas que podem atendê-lo agora (um preço recente, o valor dentro dos limites delas, o trilho de pagamento, espaço para mais uma ordem e liquidez on-chain): primeiro o melhor preço para a pessoa, depois a reputação (taxa de conclusão, tempo mediano de liberação, disputas perdidas) e depois o comerciante com menos ordens abertas. Uma cotação vale por um minuto e mostra o nome de exibição e o histórico do comerciante, nunca o seu endereço nem as suas contas.
+- **Uma compra (`BUY`).** O matcher abre a ordem sobre o saldo do comerciante no contrato (o comerciante o autorizou com `setMatcher`, até um teto por ordem), para o `recipient` que o cliente indica. O cliente mostra à pessoa a conta do comerciante (`paymentDetails`) e o valor exato; a pessoa transfere e o cliente informa (`POST /v1/p2p/orders/{id}/paid`, que o matcher envia on-chain); o comerciante, ou o seu bot, libera. O nome e o documento de quem paga são obrigatórios: o comerciante confere se a transferência vem dessa pessoa.
+- **Uma venda (`SELL`).** A resposta traz duas transações não assinadas para a carteira da pessoa: a aprovação exata e `openWithDeposit`. O comerciante aceita com uma caução de 10% do valor, tirada do seu saldo, paga a conta da pessoa (`beneficiary`, mostrada só a esse comerciante) e marca a ordem como paga; a pessoa libera, ou seis horas sem disputa depois do pagamento liberam (a janela de liquidação que a pessoa assina).
+- **Cobranças** (`/v1/p2p/charges`): um valor em moeda local pago numa página hospedada (`PAYMENT_LINK_CHECKOUT_URL/p2p/<id>`), como uma compra entregue a uma das contas registradas do cliente; `P2P_CHARGE_SUCCEEDED` quando uma das suas ordens se completa. A página do pagador mostra `payeeName` (o nome que o cliente dá à cobrança) como quem cobra, e `qr` é essa página como QR.
+- **Payouts** (`/v1/p2p/payouts`): moeda local para beneficiários, a partir do saldo do cliente no contrato. Cada item que um comerciante pega é aberto pelo matcher sobre esse saldo; o comerciante aceita com uma caução, paga e o marca como pago; o cliente libera, ou o silêncio libera quando ele permitiu `autoSettle`.
+- **Os status seguem a chain.** Uma ordem fica `pending`, `awaiting_acceptance`, `awaiting_payment`, `paid` ou `disputed`, e depois `completed`, `cancelled`, `expired` (cancelada após um prazo), `resolved` ou `failed` (nunca foi aberta). Um indexador lê os logs de cada implantação até as suas confirmações, em intervalos que os seus nós públicos aceitam, relendo os últimos blocos, e move as ordens com escritas compare-and-swap. O matcher cancela uma ordem que a chain ainda mostra em espera depois do prazo (qualquer um pode fazer isso), o que libera a liquidez. Uma ordem paga com janela de liquidação traz `settleDeadline`: depois dela qualquer um pode liberá-la, e o lado do vendedor já não pode disputá-la.
+- **Webhooks.** `P2P_ORDER_CREATED` (aberta on-chain), `_ACCEPTED`, `_PAID`, `_COMPLETED`, `_CANCELLED`, `_EXPIRED`, `_DISPUTED`, `_RESOLVED`, `_FAILED`, `P2P_CHARGE_SUCCEEDED` e `P2P_PAYOUT_BATCH_COMPLETED`. O evento de uma ordem vai para o seu cliente (`role: "client"`) e para o consumer do seu comerciante (`role: "merchant"`), cada um com a sua própria projeção e sem dados pessoais: uma parte com direito a esses dados os lê nas rotas.
+- **Bots.** O bot de um comerciante ou de um cliente tem a sua própria chave, e a conta lhe concede bits de permissão com `setOperator` (abrir, liberar, negociar, sacar). `POST /v1/p2p/transactions` monta toda transação que uma carteira ou um bot assina (approve, deposit, withdraw, setOperator, setMatcher, accept, markPaid, release, cancel, dispute), verificando antes a ordem e a parte. `POST /v1/p2p/merchant/transfer-matches` recebe uma notificação bancária e responde as ordens que ela mais provavelmente liquida, cada uma com a sua liberação pronta para assinar. `GET /v1/p2p/accounts/{id}` mostra o saldo livre de cada token, lido do contrato, e `locked`, somado dos registros de ordens deste serviço; `GET /v1/p2p/orders?address=` lista as ordens de uma carteira.
+
+### Chaves, confiança e dados pessoais
+
+- **A Cosmos Pay nunca detém os tokens.** Todo token fica no contrato; só o seu proprietário, ou um operador que ele escolheu, o retira, e só para o proprietário. A única chave neste servidor é a do matcher (`P2P_MATCHER_PRIVATE_KEY`, uma chave EVM para todas as redes): ela paga o gás, abre ordens sobre saldos que a autorizaram e age por um comprador para quem abriu uma ordem (marcar como paga, cancelar antes do pagamento, abrir disputa). Ela nunca pode sacar, nem liberar a ordem de um vendedor. Toda transação do matcher é gravada em `p2p_matcher_tx` antes de ser transmitida, e só esses bytes são enviados de novo. A inicialização recusa uma chave do matcher igual a `MONAD_RELAYER_PRIVATE_KEY` ou `SANDBOX_TREASURY_PRIVATE_KEY`. Mantenha-a abastecida com a moeda de gás de cada rede.
+- **O proprietário e o árbitro não estão neste servidor.** O proprietário (taxa, tokens, árbitro, tesouraria, pausa) e o árbitro (`resolve`) são carteiras externas, multisigs na mainnet. O console monta a transação `resolve` do árbitro (`POST /v1/admin/p2p/orders/{id}/resolution`) para a carteira dele assinar; uma resolução só paga o comprador e o vendedor da própria ordem.
+- **O limite da confiança.** Uma chave do matcher vazada, sozinha, pode bloquear a liquidez dos comerciantes até os prazos e liberar as ordens de um vendedor que permitiu `autoSettle` e não abriu disputa a tempo. Uma chave do matcher e uma chave do árbitro vazadas juntas poderiam drenar a liquidez com disputas falsas. Por isso o árbitro é um multisig, `setMatcher` com `autoSettle` é recusado para uma conta que vende tokens por meio de ofertas, e toda transação do matcher é registrada antes de ser enviada.
+- **Os dados pessoais** (dados e titulares dos métodos de pagamento, identidade de quem paga, contas dos beneficiários) são cifrados em repouso com `P2P_DATA_ENCRYPTION_KEY` (AES-256-GCM, vinculados à sua linha e ao seu campo), nunca vão num webhook e só são mostrados ao seu dono e à contraparte de uma ordem em andamento. Toda leitura filtra por consumer e pelo nível da chave: uma linha de outro nível é o 404 de uma que não existe.
+- **As rotas sem chave de quem paga** (`/v1/p2p-checkout/*`, `@Public()`, `Cache-Control: no-store`) nunca deixam que só o id de uma cobrança gaste: uma ordem em andamento por cobrança, a menos que ela seja de uso múltiplo, uma ordem em andamento por endereço de cliente (quem chama por IPv6 conta pelo seu /48, guardado como HMAC), um orçamento de criação por cobrança (`429` com `Retry-After`) e orçamentos por endereço. Ler uma ordem e informar o seu pagamento exigem o token de quem paga (256 bits, do qual só o SHA-256 é guardado). Quem tem o id de uma cobrança de uso único pode fazer quem paga esperar até o fim da janela de pagamento; quem paga cancela a própria ordem com o seu token.
+
+### Implantação do contrato
+
+- `npm run p2p:deploy -- --network base --tier testnet --secrets-file <file outside the repo> --treasury 0x… --arbiter 0x… --fee-bps 50` verifica o `eth_chainId` do nó, implanta o artefato commitado, habilita os tokens listados da rede (com `--owner`, depois transfere a propriedade para essa carteira) e imprime `P2P_MARKET_CONTRACTS_TESTNET` e `P2P_MARKET_DEPLOY_BLOCKS_TESTNET`. Na mainnet exige `--i-understand-mainnet`, `--owner` (o multisig, definido na construção) e `--rpc`, e imprime as chamadas `setToken` do proprietário em vez de enviá-las. Executado de novo com `--contract` ou `--env-file`, verifica a implantação (código, proprietário, tokens) e para.
+- O serviço verifica cada endereço configurado antes de servi-lo: o código dele deve ser igual ao runtime do artefato, e só são listados os tokens que o contrato permite. Um endereço errado é uma rede que nunca é servida, registrada no log para o operador.
+- `npm run p2p:verify-tokens -- --tier mainnet --rpc-urls <JSON>` confere on-chain a tabela de tokens (`symbol`, `decimals`).
+- Um nível sem contrato fica desligado: ali todas as rotas respondem `network_unsupported` (`GET /v1/p2p/market` responde `available: false`), e nada precisa do matcher nem da chave de dados.
+
+### Rotas do mercado P2P
+
+| Método | Rota | Scope | Para quê |
+| --- | --- | --- | --- |
+| GET | `/v1/p2p/market` | `p2p:read` | Redes, contratos, tokens, moedas e campos de cada trilho, taxa, prazos, percentual de caução e o matcher |
+| POST | `/v1/p2p/accounts/challenge` | `p2p:write` | A mensagem que uma carteira assina para se registrar |
+| POST | `/v1/p2p/accounts` | `p2p:write` | Registrar uma carteira com essa assinatura |
+| GET | `/v1/p2p/accounts` | `p2p:read` | As suas carteiras no nível da chave |
+| GET | `/v1/p2p/accounts/{id}` | `p2p:read` | Uma carteira com os seus saldos, as condições do matcher e os operadores, lidos on-chain |
+| PATCH | `/v1/p2p/accounts/{id}` | `p2p:write` | Rótulo, nome de comerciante, pausa como comerciante |
+| DELETE | `/v1/p2p/accounts/{id}` | `p2p:write` | Esquecer uma carteira sem ordem em andamento |
+| POST | `/v1/p2p/payment-methods` | `p2p:write` | Onde uma conta recebe moeda local, validado por trilho |
+| GET | `/v1/p2p/payment-methods` | `p2p:read` | Os seus métodos de pagamento |
+| PATCH | `/v1/p2p/payment-methods/{id}` | `p2p:write` | Alterar ou desativar um |
+| DELETE | `/v1/p2p/payment-methods/{id}` | `p2p:write` | Excluir um |
+| POST | `/v1/p2p/offers` | `p2p:write` | Publicar um preço permanente como comerciante |
+| GET | `/v1/p2p/offers` | `p2p:read` | As suas ofertas |
+| PATCH | `/v1/p2p/offers/{id}` | `p2p:write` | Atualizar um preço, mudar limites ou trilhos, desligá-la |
+| DELETE | `/v1/p2p/offers/{id}` | `p2p:write` | Excluir uma |
+| POST | `/v1/p2p/quotes` | `p2p:write` | O comerciante, o preço e as taxas para um valor, por um minuto |
+| POST | `/v1/p2p/orders` | `p2p:write` | Uma ordem a partir de uma cotação (uma venda responde as transações a assinar) |
+| GET | `/v1/p2p/orders` | `p2p:read` | As ordens que você criou |
+| GET | `/v1/p2p/orders/{id}` | `p2p:read` | Uma delas, com onde pagar enquanto está em andamento |
+| POST | `/v1/p2p/orders/{id}/paid` | `p2p:write` | Informar a transferência de uma compra (o matcher a marca como paga) |
+| POST | `/v1/p2p/orders/{id}/cancel` | `p2p:write` | Desistir de uma compra antes de pagar, ou retirar um payout que ninguém aceitou |
+| POST | `/v1/p2p/orders/{id}/dispute` | `p2p:write` | Escalar uma compra paga que o comerciante não libera |
+| GET | `/v1/p2p/merchant/orders` | `p2p:read` | As ordens que as suas contas de comerciante atendem |
+| GET | `/v1/p2p/merchant/orders/{id}` | `p2p:read` | Uma delas, com os dados da contraparte enquanto está em andamento |
+| POST | `/v1/p2p/merchant/transfer-matches` | `p2p:read` | As ordens que uma transferência bancária liquida, com a liberação pronta |
+| POST | `/v1/p2p/transactions` | `p2p:write` | Montar uma transação não assinada para uma carteira ou um bot |
+| POST | `/v1/p2p/charges` | `p2p:write` | Uma cobrança em moeda local, paga numa página hospedada |
+| GET | `/v1/p2p/charges` | `p2p:read` | As suas cobranças |
+| GET | `/v1/p2p/charges/{id}` | `p2p:read` | Uma delas |
+| DELETE | `/v1/p2p/charges/{id}` | `p2p:write` | Cancelar uma cobrança aberta |
+| POST | `/v1/p2p/payouts` | `p2p:write` | Pagar moeda local a partir do seu saldo (até 100 itens) |
+| GET | `/v1/p2p/payouts` | `p2p:read` | Os seus lotes de payouts |
+| GET | `/v1/p2p/payouts/{id}` | `p2p:read` | Um lote com as suas ordens |
+| GET | `/v1/p2p-checkout/charges/{id}` | nenhum (`@Public()`) | A cobrança como quem paga a vê |
+| POST | `/v1/p2p-checkout/charges/{id}/orders` | nenhum (`@Public()`) | Começar a pagar: um comerciante para quem transferir, e um token de quem paga |
+| GET | `/v1/p2p-checkout/orders/{id}` | nenhum (`@Public()`, `X-Payer-Token`) | A ordem de quem paga |
+| POST | `/v1/p2p-checkout/orders/{id}/paid` | nenhum (`@Public()`, `X-Payer-Token`) | Informar a transferência |
+| POST | `/v1/p2p-checkout/orders/{id}/cancel` | nenhum (`@Public()`, `X-Payer-Token`) | Desistir antes de pagar |
+| GET | `/v1/admin/p2p/disputes` | console da plataforma | Ordens à espera do árbitro |
+| GET | `/v1/admin/p2p/orders/{id}` | console da plataforma | Uma ordem com os dados das duas partes, com auditoria |
+| POST | `/v1/admin/p2p/orders/{id}/resolution` | console da plataforma | A transação `resolve` do árbitro, para assinar na carteira dele |
+| PATCH | `/v1/admin/p2p/merchants/{accountId}` | console da plataforma | Suspender um comerciante (um `SUSPENDED` nunca recebe ordens) ou reativá-lo |
+
 ## Plugins — extensões sob um slug
 
 Outras equipes integram sua tecnologia a este serviço como um **plugin**: uma pasta em
@@ -2616,6 +2741,13 @@ serviço em `src/native-plugins/<slug>/`, ligados pela mesma lista
   grupo de rotas de plugin nativo que não exige API key.
 
 ## Atualização — mudanças incompatíveis e notas de deploy
+
+### Mercado P2P: um módulo novo do core, dez tabelas e onze eventos de webhook
+
+- **A migração `20261119120000_p2p_market`** cria dez tabelas (`p2p_account`, `p2p_account_challenge`, `p2p_payment_method`, `p2p_offer`, `p2p_quote`, `p2p_order`, `p2p_charge`, `p2p_payout_batch`, `p2p_matcher_tx`, `p2p_chain_cursor`) e acrescenta onze valores a `WebhookEventType` (`P2P_ORDER_CREATED`, `P2P_ORDER_ACCEPTED`, `P2P_ORDER_PAID`, `P2P_ORDER_COMPLETED`, `P2P_ORDER_CANCELLED`, `P2P_ORDER_EXPIRED`, `P2P_ORDER_DISPUTED`, `P2P_ORDER_RESOLVED`, `P2P_ORDER_FAILED`, `P2P_CHARGE_SUCCEEDED`, `P2P_PAYOUT_BATCH_COMPLETED`); nada existente é reescrito.
+- **Rotas novas** sob `/v1/p2p` com dois scopes novos, `p2p:read` e `p2p:write` (dê-os às API keys que usam o mercado; a chave pública compartilhada não pode chamar nenhuma), as de quem paga sob `/v1/p2p-checkout` (sem chave: o gateway precisa de uma rota de prefixo sem chave para elas, como a de `/v1/zk-checkout`), e as do console sob `/v1/admin/p2p`.
+- **Variáveis novas, todas opcionais:** `P2P_MARKET_CONTRACTS_TESTNET`, `P2P_MARKET_CONTRACTS_MAINNET`, `P2P_MARKET_DEPLOY_BLOCKS_TESTNET`, `P2P_MARKET_DEPLOY_BLOCKS_MAINNET`, `P2P_RPC_URLS_TESTNET`, `P2P_RPC_URLS_MAINNET`, `P2P_MATCHER_PRIVATE_KEY`, `P2P_DATA_ENCRYPTION_KEY`, `P2P_MERCHANT_MAX_OPEN_ORDERS`, `P2P_INDEXER_INTERVAL_MS`. Nada muda até que `P2P_MARKET_CONTRACTS_*` nomeie uma implantação; a partir daí o nível dela precisa do resto do seu conjunto, e `P2P_DATA_ENCRYPTION_KEY` entra para os segredos que não podem compartilhar um valor.
+- **Códigos de erro novos:** `p2p_challenge_invalid`, `p2p_signature_invalid`, `p2p_account_taken`, `p2p_no_match`.
 
 ### Links de pagamento: um sandbox para as redes de testes
 
@@ -3751,6 +3883,16 @@ Toda variável lida de `process.env` em `src/` é validada no boot por
 | `MONAD_LOG_BLOCK_RANGE` | não | `100` | Blocos que um `eth_getLogs` pode abranger: o limite do provedor RPC (o RPC público permite 100) |
 | `MONAD_RELAYER_PRIVATE_KEY` | não | — | Chave do relayer (hex de 32 bytes). Configurada, cada intenção na Monad recebe seu próprio endereço de depósito e o relayer encaminha os depósitos ao comerciante, menos uma taxa. Guarda só dinheiro para gas: os encaminhadores que ela implanta não podem pagar mais ninguém |
 | `MONAD_DEPOSIT_TOKEN_FEES` | não | — | Taxa do relayer por depósito de cada ERC-20, JSON `{"0xToken": "0.05"}` em unidades do token. Um token sem entrada é encaminhado de graça (o relayer paga o gas) |
+| `P2P_MARKET_CONTRACTS_TESTNET` | não | nenhum | JSON `{"<network>":"0x…"}`: as implantações do P2PMarket nas redes de testes (`npm run p2p:deploy` o imprime). A presença dela liga o mercado P2P para as chaves `dev`; com ela, `P2P_MARKET_DEPLOY_BLOCKS_TESTNET`, `P2P_MATCHER_PRIVATE_KEY` e `P2P_DATA_ENCRYPTION_KEY` são obrigatórias na inicialização |
+| `P2P_MARKET_CONTRACTS_MAINNET` | não | nenhum | O mesmo para a mainnet (chaves `prod`); cada rede também precisa do seu nó em `P2P_RPC_URLS_MAINNET` |
+| `P2P_MARKET_DEPLOY_BLOCKS_TESTNET` | com contratos de testnet | nenhum | JSON `{"<network>":<block>}`: onde o indexador começa a ler cada implantação de teste |
+| `P2P_MARKET_DEPLOY_BLOCKS_MAINNET` | com contratos de mainnet | nenhum | O mesmo para a mainnet |
+| `P2P_RPC_URLS_TESTNET` | não | o nó do sandbox | JSON `{"<network>":"https://…"}`: o nó de cada rede de testes (senão a sua entrada em `SANDBOX_RPC_URLS`, senão um público). Cada um é conferido pelo chain id da rede antes do uso |
+| `P2P_RPC_URLS_MAINNET` | com contratos de mainnet | nenhum | O nó do operador para cada rede de mainnet, um para cada contrato |
+| `P2P_MATCHER_PRIVATE_KEY` | com contratos | nenhum | A chave EVM do matcher (hex de 32 bytes), uma para todas as redes: só gás e autoridade de matcher, nunca os tokens de ninguém. Recusada quando igual a `MONAD_RELAYER_PRIVATE_KEY` ou `SANDBOX_TREASURY_PRIVATE_KEY` |
+| `P2P_DATA_ENCRYPTION_KEY` | com contratos | nenhum | 32 bytes (base64 ou hex) que cifram em repouso os dados de pagamento e as identidades. Diferente de qualquer outro segredo; perdê-la é perder esses dados |
+| `P2P_MERCHANT_MAX_OPEN_ORDERS` | não | `5` | Ordens em andamento que uma conta de comerciante aceita ao mesmo tempo |
+| `P2P_INDEXER_INTERVAL_MS` | não | `15000` | Com que frequência rodam o indexador, o job de expiração e o acompanhamento do matcher (só com `OBSERVER_ENABLED`) |
 | `SANDBOX_DEPOSIT_SEED` | não | nenhum | Semente HD do sandbox (16 a 64 bytes, hex). Com `SANDBOX_TREASURY_PRIVATE_KEY`, liga o sandbox: os links de uma chave `dev` em redes pagas por endereços de depósito são liquidados em redes de testes. Só fundos de teste |
 | `SANDBOX_TREASURY_PRIVATE_KEY` | não | nenhum | Chave da tesouraria do sandbox (hex de 32 bytes): faz os pagamentos e reembolsos do sandbox nas redes de testes EVM, e é a raiz da chave própria da tesouraria em cada uma das demais (HKDF por rede). Nunca uma chave de mainnet; a inicialização recusa `MONAD_RELAYER_PRIVATE_KEY` |
 | `SANDBOX_RPC_URLS` | não | RPCs públicos das redes de testes | Pares `net=url` separados por vírgula que substituem o nó de uma rede de testes (uma URL JSON-RPC, exceto `sui`, uma URL GraphQL, e `aptos`, a base `/v1` da sua API REST). Cada um é conferido pela identidade de cadeia da sua rede de testes antes de ser considerado confiável |

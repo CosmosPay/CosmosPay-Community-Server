@@ -71,6 +71,9 @@ src/
                                   build + relay the Soroban `send`, status from the ledger and LayerZero Scan
   zk-payments/                    private payments: confidential transfers on Cosmos Pay's token, verified on-chain;
                                   the confidential token SDK is loaded only by confidential-sdk.ts
+  p2p/                            the P2P market on Cosmos Pay's P2PMarket contract (EVM networks): accounts,
+                                  payment methods, offers, matching, orders, charges and the keyless
+                                  /v1/p2p-checkout, payouts, transaction builder, matcher, indexer, expiry job
   liquidity-pools/                AMM deposit/withdraw, pool + position reads, cost basis + commission on gain
   observer/                       background reconciler: swaps + LP ops against Horizon, one adapter per table
   webhooks/                       webhook endpoints CRUD + dispatcher (HMAC-signed, retried)
@@ -106,11 +109,14 @@ prisma/schema.prisma              Consumer, PaymentIntent, Swap, ChainSwap, Cros
                                   PluginInstallation, PluginRecord
                                   ProtectedPayment, ProtectedPaymentTransaction
                                   OnrampP2pSession
+                                  P2pAccount, P2pAccountChallenge, P2pPaymentMethod, P2pOffer, P2pQuote,
+                                  P2pOrder, P2pCharge, P2pPayoutBatch, P2pMatcherTx, P2pChainCursor
 test/                             e2e suites: gateway gate, admin + alias console gates,
                                   payment intents, swaps, liquidity pools, KYC, webhooks
 plugins/                          THE plugins folder: one <slug>/ per plugin (plugin.json, index.ts, signature.json)
 scripts/                          OpenAPI generator, README check, operator scripts,
                                   zk/: deploy and check the private payments token on testnet
+                                  p2p/: deploy or verify the P2P market contract, check its token table
 contracts/                        PaymentForwarder.sol — Monad deposit addresses (npm run contracts:compile)
 deploy/authentik/                 Authentik blueprint: the wallet sign-in and sign-up
 docs/i18n/                        this README in es, pt, de, fr, hi, zh
@@ -171,6 +177,10 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | GET | `/v1/admin/consumers` | 平台控制台 |  |
 | GET | `/v1/admin/cross-chain-swaps` | 平台控制台 |  |
 | GET | `/v1/admin/customers` | 平台控制台 |  |
+| GET | `/v1/admin/p2p/disputes` | 平台控制台 |  |
+| GET | `/v1/admin/p2p/orders/{id}` | 平台控制台 |  |
+| POST | `/v1/admin/p2p/orders/{id}/resolution` | 平台控制台 |  |
+| PATCH | `/v1/admin/p2p/merchants/{accountId}` | 平台控制台 |  |
 | GET | `/v1/admin/payins` | 平台控制台 |  |
 | GET | `/v1/admin/payment-intents` | 平台控制台 |  |
 | GET | `/v1/admin/payouts` | 平台控制台 |  |
@@ -280,6 +290,44 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | GET | `/v1/onramp/receivers/{receiverId}/virtual-accounts` | `onramp:read` |  |
 | POST | `/v1/onramp/receivers/{receiverId}/virtual-accounts` | `onramp:write` |  |
 | POST | `/v1/onramp/trustline` | `onramp:write` |  |
+| GET | `/v1/p2p-checkout/charges/{id}` | 无，`@Public()`，按客户端地址计预算 |  |
+| POST | `/v1/p2p-checkout/charges/{id}/orders` | 无，`@Public()`，按客户端地址计预算 |  |
+| GET | `/v1/p2p-checkout/orders/{id}` | 无，`@Public()`，按客户端地址计预算 |  |
+| POST | `/v1/p2p-checkout/orders/{id}/cancel` | 无，`@Public()`，按客户端地址计预算 |  |
+| POST | `/v1/p2p-checkout/orders/{id}/paid` | 无，`@Public()`，按客户端地址计预算 |  |
+| GET | `/v1/p2p/accounts` | `p2p:read` |  |
+| POST | `/v1/p2p/accounts` | `p2p:write` |  |
+| POST | `/v1/p2p/accounts/challenge` | `p2p:write` |  |
+| GET | `/v1/p2p/accounts/{id}` | `p2p:read` |  |
+| PATCH | `/v1/p2p/accounts/{id}` | `p2p:write` |  |
+| DELETE | `/v1/p2p/accounts/{id}` | `p2p:write` |  |
+| GET | `/v1/p2p/charges` | `p2p:read` |  |
+| POST | `/v1/p2p/charges` | `p2p:write` |  |
+| GET | `/v1/p2p/charges/{id}` | `p2p:read` |  |
+| DELETE | `/v1/p2p/charges/{id}` | `p2p:write` |  |
+| GET | `/v1/p2p/market` | `p2p:read` |  |
+| GET | `/v1/p2p/merchant/orders` | `p2p:read` |  |
+| GET | `/v1/p2p/merchant/orders/{id}` | `p2p:read` |  |
+| POST | `/v1/p2p/merchant/transfer-matches` | `p2p:read` |  |
+| GET | `/v1/p2p/offers` | `p2p:read` |  |
+| POST | `/v1/p2p/offers` | `p2p:write` |  |
+| PATCH | `/v1/p2p/offers/{id}` | `p2p:write` |  |
+| DELETE | `/v1/p2p/offers/{id}` | `p2p:write` |  |
+| GET | `/v1/p2p/orders` | `p2p:read` |  |
+| POST | `/v1/p2p/orders` | `p2p:write` |  |
+| GET | `/v1/p2p/orders/{id}` | `p2p:read` |  |
+| POST | `/v1/p2p/orders/{id}/cancel` | `p2p:write` |  |
+| POST | `/v1/p2p/orders/{id}/dispute` | `p2p:write` |  |
+| POST | `/v1/p2p/orders/{id}/paid` | `p2p:write` |  |
+| GET | `/v1/p2p/payment-methods` | `p2p:read` |  |
+| POST | `/v1/p2p/payment-methods` | `p2p:write` |  |
+| PATCH | `/v1/p2p/payment-methods/{id}` | `p2p:write` |  |
+| DELETE | `/v1/p2p/payment-methods/{id}` | `p2p:write` |  |
+| GET | `/v1/p2p/payouts` | `p2p:read` |  |
+| POST | `/v1/p2p/payouts` | `p2p:write` |  |
+| GET | `/v1/p2p/payouts/{id}` | `p2p:read` |  |
+| POST | `/v1/p2p/quotes` | `p2p:write` |  |
+| POST | `/v1/p2p/transactions` | `p2p:write` |  |
 | GET | `/v1/payment-intents` | `payments:read` |  |
 | GET | `/v1/payment-intents/networks` | `payments:read` | ✓ |
 | POST | `/v1/payment-intents/pay` | `payments:write` | ✓ |
@@ -1504,6 +1552,83 @@ CREATED | AWAITING_FUNDING --merchant cancels--> CANCELLED
 - **运维步骤。** 市场按 Client ID 注册 webhook，方式是发邮件到签发集成方 id 的同一个地址：把 Client ID 和 URL `https://api.cosmospay.lat/cosmos-api/v1/onramp/p2p/webhooks`（网关的公共前缀，后接 `/v1/onramp/p2p/webhooks`）发给它。网关需要一条只匹配 `POST /v1/onramp/p2p/webhooks` 的无 key 路由，并原样透传请求体；付款方的路由不需要任何新配置。
 - **本版本不包含：** 请求被支付时发出的出站 webhook 事件、请求的仪表盘视图，以及由付款方输入金额的可重复使用二维码。
 
+## P2P 市场
+
+个人与商户之间用本地货币买卖稳定币，代币锁定在 Cosmos Pay 自己的合约中（`contracts/P2PMarket.sol`，每个 EVM 网络和层级各部署一份），直到收取本地货币的一方确认款项已到账。这是一个核心模块（`src/p2p/`），独立于上文的 P2P 入金：中间没有第三方交易平台，并为商户、商户的 bot 以及在自家应用中嵌入买卖功能的客户端提供公开 API。它在运营方部署了合约的每个 EVM 网络上运行，以配置为准：`GET /v1/p2p/market` 列出密钥所在层级的这些网络，`src/p2p/p2p-networks.ts` 说明它可以在哪些网络上、用哪些稳定币运行。每个网络还附带其原生币、区块浏览器和一个钱包可添加的公共节点（`wallet_addEthereumChain`），均取自公开常量，绝不取自本服务读取所用的节点。
+
+### 一笔交易如何进行
+
+- **用户输入金额，由市场挑选商户。** `POST /v1/p2p/quotes` 对此刻能承接该金额的挂单排序（价格是最新的、金额在其限额内、支付通道相符、还能再接一笔订单、链上流动性充足）：先看对用户最优的价格，再看信誉（完成率、放行时间中位数、败诉的争议数），最后看未完成订单最少的商户。报价有效一分钟，显示商户的展示名称和交易记录，绝不显示其地址或账户。
+- **购买（`BUY`）。** matcher（撮合方）在合约中商户的余额上，为客户端指定的 `recipient` 开立订单（商户已通过 `setMatcher` 授权它，每笔订单有上限）。客户端向用户展示商户的账户（`paymentDetails`）和精确金额；用户转账，客户端上报（`POST /v1/p2p/orders/{id}/paid`，由 matcher 发送上链）；商户或其 bot 放行。付款方的姓名和证件为必填：商户据此核对转账确实来自此人。
+- **出售（`SELL`）。** 响应中包含两笔供用户钱包签名的未签名交易：精确额度的授权和 `openWithDeposit`。商户从自己的余额中拿出金额 10% 的保证金来接单，向用户的账户（`beneficiary`，只对该商户显示）付款，并把订单标记为已付款；随后由用户放行，或者付款后六小时内无人发起争议即自动放行（即用户签名确认的结算窗口）。
+- **收款**（`/v1/p2p/charges`）：在 Cosmos Pay 提供的页面（`PAYMENT_LINK_CHECKOUT_URL/p2p/<id>`）上支付的一笔本地货币金额，以购买的形式交付到客户端已注册的某个账户；其中一笔订单完成时发出 `P2P_CHARGE_SUCCEEDED`。付款页面把 `payeeName`（客户为收款设定的名称）显示为收款方，`qr` 是该页面的二维码。
+- **出款**（`/v1/p2p/payouts`）：从客户端在合约中的余额向收款人支付本地货币。商户接下的每一项都由 matcher 在该余额上开立；商户缴纳保证金接单、付款并标记为已付款；随后由客户端放行，若客户端允许了 `autoSettle`，则无人表态也会自动放行。
+- **状态以链上为准。** 订单处于 `pending`、`awaiting_acceptance`、`awaiting_payment`、`paid` 或 `disputed`，之后变为 `completed`、`cancelled`、`expired`（超过期限后被取消）、`resolved` 或 `failed`（从未开立）。索引器读取每个部署的日志直到其确认数，按其公共节点接受的区间分段读取，并重读最近的区块，用 compare-and-swap 写入推进订单状态。超过期限而链上仍显示等待中的订单由 matcher 取消（任何人都可以这样做），从而释放流动性。带结算窗口的已付款订单含 `settleDeadline`：此后任何人都可释放该订单，卖方一侧也不能再发起争议。
+- **Webhook。** `P2P_ORDER_CREATED`（已在链上开立）、`_ACCEPTED`、`_PAID`、`_COMPLETED`、`_CANCELLED`、`_EXPIRED`、`_DISPUTED`、`_RESOLVED`、`_FAILED`、`P2P_CHARGE_SUCCEEDED` 和 `P2P_PAYOUT_BATCH_COMPLETED`。订单事件会发给其客户端（`role: "client"`）和其商户所属的消费者（`role: "merchant"`），各自有独立的投影，且不含个人信息：有权查看的一方通过路由读取这些信息。
+- **Bot。** 商户或客户端的 bot 持有自己的密钥，账户通过 `setOperator` 授予它权限位（开单、放行、交易、提取）。`POST /v1/p2p/transactions` 构建钱包或 bot 需要签名的每一笔交易（approve、deposit、withdraw、setOperator、setMatcher、accept、markPaid、release、cancel、dispute），并先检查订单和当事方。`POST /v1/p2p/merchant/transfer-matches` 接收一条银行到账通知，返回它最可能结清的订单，每笔都附上可直接签名的放行交易。`GET /v1/p2p/accounts/{id}` 显示每个代币的可用余额（读自合约）和 `locked`（由本服务的订单记录汇总）；`GET /v1/p2p/orders?address=` 列出某个钱包的订单。
+
+### 密钥、信任与个人数据
+
+- **Cosmos Pay 从不持有代币。** 每个代币都在合约里；只有其所有者或所有者选定的 operator 才能把它转出，而且只能转给所有者。本服务器上唯一的密钥是 matcher 的（`P2P_MATCHER_PRIVATE_KEY`，所有网络共用一把 EVM 密钥）：它支付 gas，在授权了它的余额上开立订单，并代表它为之开立订单的买家行事（标记已付款、付款前取消、发起争议）。它永远不能提取资金，也不能放行卖家的订单。matcher 的每笔交易在广播前都会写入 `p2p_matcher_tx`，之后只会重发这些字节。启动时会拒绝与 `MONAD_RELAYER_PRIVATE_KEY` 或 `SANDBOX_TREASURY_PRIVATE_KEY` 相同的 matcher 密钥。请在每个网络上为它备足 gas 币。
+- **所有者和仲裁方都不在本服务器上。** 所有者（手续费、代币、仲裁方、金库、暂停）和仲裁方（`resolve`）是外部钱包，在主网上为多签。控制台构建仲裁方的 `resolve` 交易（`POST /v1/admin/p2p/orders/{id}/resolution`），交由其钱包签名；裁决只会向该订单自己的买家和卖家付款。
+- **信任边界。** 仅泄露 matcher 密钥，就能把商户的流动性锁定到各订单期限为止，并放行那些允许了 `autoSettle` 却没有及时发起争议的卖家的订单。matcher 密钥与仲裁方密钥同时泄露，则可能通过伪造争议抽走流动性。因此仲裁方是多签，通过挂单出售代币的账户不能以带 `autoSettle` 的方式调用 `setMatcher`，并且 matcher 的每笔交易在发送前都有记录。
+- **个人数据**（支付方式的详情及其持有人、付款方身份、收款人账户）以 `P2P_DATA_ENCRYPTION_KEY` 静态加密封存（AES-256-GCM，绑定到所在行和字段），从不放入 webhook，只展示给数据所有者和进行中订单的对手方。每次读取都按消费者和密钥的层级过滤：其他层级的行等同于不存在的行，返回 404。
+- **付款方的无 key 路由**（`/v1/p2p-checkout/*`、`@Public()`、`Cache-Control: no-store`）绝不允许仅凭一个收款 id 就能花钱：每笔收款同时只能有一个进行中的订单（可多次使用的收款除外），每个客户端地址同时只能有一个进行中的订单（IPv6 调用方按其 /48 计，以 HMAC 存储），每笔收款有创建预算（`429` 并附 `Retry-After`），每个地址也有预算。读取订单和上报付款都需要该订单的付款方 token（256 位，只存储其 SHA-256）。持有一次性收款 id 的人最多能让其付款方一直等到付款窗口结束；付款方可以用自己的 token 取消自己的订单。
+
+### 部署合约
+
+- `npm run p2p:deploy -- --network base --tier testnet --secrets-file <file outside the repo> --treasury 0x… --arbiter 0x… --fee-bps 50` 会检查节点的 `eth_chainId`，部署已提交到仓库的构件，启用该网络列出的代币（带 `--owner` 时，随后把所有权移交给该钱包），并打印 `P2P_MARKET_CONTRACTS_TESTNET` 和 `P2P_MARKET_DEPLOY_BLOCKS_TESTNET`。在主网上它需要 `--i-understand-mainnet`、`--owner`（多签，在构造时设定）和 `--rpc`，并打印所有者需要执行的 `setToken` 调用，而不是直接发送。带 `--contract` 或 `--env-file` 再次运行时，它会核验该部署（代码、所有者、代币）然后停止。
+- 服务在提供每个已配置地址之前都会先检查：其代码必须与构件的运行时代码一致，并且只列出合约允许的代币。地址错误的网络永远不会被提供，并会为运营方写入日志。
+- `npm run p2p:verify-tokens -- --tier mainnet --rpc-urls <JSON>` 在链上核对代币表（`symbol`、`decimals`）。
+- 没有合约的层级处于关闭状态：那里的每个路由都返回 `network_unsupported`（`GET /v1/p2p/market` 返回 `available: false`），也不需要 matcher 或数据密钥。
+
+### P2P 市场路由
+
+| 方法 | 路径 | Scope | 用途 |
+| --- | --- | --- | --- |
+| GET | `/v1/p2p/market` | `p2p:read` | 网络、合约、代币、货币和各支付通道的字段、手续费、时间窗口、保证金比例以及 matcher |
+| POST | `/v1/p2p/accounts/challenge` | `p2p:write` | 钱包注册时要签名的消息 |
+| POST | `/v1/p2p/accounts` | `p2p:write` | 用该签名注册钱包 |
+| GET | `/v1/p2p/accounts` | `p2p:read` | 你在密钥所在层级上的钱包 |
+| GET | `/v1/p2p/accounts/{id}` | `p2p:read` | 单个钱包及其余额、matcher 条款和 operator，均从链上读取 |
+| PATCH | `/v1/p2p/accounts/{id}` | `p2p:write` | 标签、商户名称、以商户身份暂停 |
+| DELETE | `/v1/p2p/accounts/{id}` | `p2p:write` | 移除没有进行中订单的钱包 |
+| POST | `/v1/p2p/payment-methods` | `p2p:write` | 账户收取本地货币的方式，按支付通道校验 |
+| GET | `/v1/p2p/payment-methods` | `p2p:read` | 你的支付方式 |
+| PATCH | `/v1/p2p/payment-methods/{id}` | `p2p:write` | 修改或停用一个 |
+| DELETE | `/v1/p2p/payment-methods/{id}` | `p2p:write` | 删除一个 |
+| POST | `/v1/p2p/offers` | `p2p:write` | 以商户身份发布长期有效的价格 |
+| GET | `/v1/p2p/offers` | `p2p:read` | 你的挂单 |
+| PATCH | `/v1/p2p/offers/{id}` | `p2p:write` | 刷新价格、修改限额或支付通道、关闭挂单 |
+| DELETE | `/v1/p2p/offers/{id}` | `p2p:write` | 删除一个 |
+| POST | `/v1/p2p/quotes` | `p2p:write` | 某个金额对应的商户、价格和费用，有效一分钟 |
+| POST | `/v1/p2p/orders` | `p2p:write` | 根据报价创建订单（出售会返回待签名的交易） |
+| GET | `/v1/p2p/orders` | `p2p:read` | 你创建的订单 |
+| GET | `/v1/p2p/orders/{id}` | `p2p:read` | 其中一笔，进行中时附带付款信息 |
+| POST | `/v1/p2p/orders/{id}/paid` | `p2p:write` | 上报一笔购买的转账（由 matcher 将其标记为已付款） |
+| POST | `/v1/p2p/orders/{id}/cancel` | `p2p:write` | 在付款前放弃一笔购买，或撤回一笔无人接单的出款 |
+| POST | `/v1/p2p/orders/{id}/dispute` | `p2p:write` | 对商户迟迟不放行的已付款购买发起争议 |
+| GET | `/v1/p2p/merchant/orders` | `p2p:read` | 你的商户账户承接的订单 |
+| GET | `/v1/p2p/merchant/orders/{id}` | `p2p:read` | 其中一笔，进行中时附带对手方信息 |
+| POST | `/v1/p2p/merchant/transfer-matches` | `p2p:read` | 一笔银行转账能结清的订单，附带准备好的放行交易 |
+| POST | `/v1/p2p/transactions` | `p2p:write` | 为钱包或 bot 构建未签名交易 |
+| POST | `/v1/p2p/charges` | `p2p:write` | 一笔以本地货币计的收款，在 Cosmos Pay 提供的页面上支付 |
+| GET | `/v1/p2p/charges` | `p2p:read` | 你的收款 |
+| GET | `/v1/p2p/charges/{id}` | `p2p:read` | 其中一笔 |
+| DELETE | `/v1/p2p/charges/{id}` | `p2p:write` | 取消一笔未完成的收款 |
+| POST | `/v1/p2p/payouts` | `p2p:write` | 从你的余额中支付本地货币（最多 100 项） |
+| GET | `/v1/p2p/payouts` | `p2p:read` | 你的出款批次 |
+| GET | `/v1/p2p/payouts/{id}` | `p2p:read` | 单个批次及其订单 |
+| GET | `/v1/p2p-checkout/charges/{id}` | 无（`@Public()`） | 付款方看到的收款 |
+| POST | `/v1/p2p-checkout/charges/{id}/orders` | 无（`@Public()`） | 开始付款：返回要转账的商户和付款方 token |
+| GET | `/v1/p2p-checkout/orders/{id}` | 无（`@Public()`，`X-Payer-Token`） | 付款方的订单 |
+| POST | `/v1/p2p-checkout/orders/{id}/paid` | 无（`@Public()`，`X-Payer-Token`） | 上报转账 |
+| POST | `/v1/p2p-checkout/orders/{id}/cancel` | 无（`@Public()`，`X-Payer-Token`） | 付款前放弃 |
+| GET | `/v1/admin/p2p/disputes` | 平台控制台 | 等待仲裁方处理的订单 |
+| GET | `/v1/admin/p2p/orders/{id}` | 平台控制台 | 含双方信息的单个订单，读取会被审计 |
+| POST | `/v1/admin/p2p/orders/{id}/resolution` | 平台控制台 | 仲裁方的 `resolve` 交易，在其钱包中签名 |
+| PATCH | `/v1/admin/p2p/merchants/{accountId}` | 平台控制台 | 暂停商户（`SUSPENDED` 的商户永远不会被撮合）或解除暂停 |
+
 ## 插件 — 以 slug 命名的扩展
 
 其他团队以**插件**的形式把自己的技术集成到本服务：`plugins/` 下的一个目录，在
@@ -1720,6 +1845,13 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 - **受保护付款同样遵守 DeFindex 的规则**：Trustless Work 构建的每个 envelope 在被记录或签名之前都会经过检查，其 submit 只转发这些记录（见*受保护付款（Trustless Work）*）。其买家路由是原生插件中唯一不需要 API key 的路由组。
 
 ## 升级 — 破坏性变更与部署说明
+
+### P2P 市场：一个新的核心模块、十张表和十一个 webhook 事件
+
+- **迁移 `20261119120000_p2p_market`** 创建十张表（`p2p_account`、`p2p_account_challenge`、`p2p_payment_method`、`p2p_offer`、`p2p_quote`、`p2p_order`、`p2p_charge`、`p2p_payout_batch`、`p2p_matcher_tx`、`p2p_chain_cursor`），并向 `WebhookEventType` 追加十一个值（`P2P_ORDER_CREATED`、`P2P_ORDER_ACCEPTED`、`P2P_ORDER_PAID`、`P2P_ORDER_COMPLETED`、`P2P_ORDER_CANCELLED`、`P2P_ORDER_EXPIRED`、`P2P_ORDER_DISPUTED`、`P2P_ORDER_RESOLVED`、`P2P_ORDER_FAILED`、`P2P_CHARGE_SUCCEEDED`、`P2P_PAYOUT_BATCH_COMPLETED`）；不改写任何已有内容。
+- **新路由**位于 `/v1/p2p` 下，带两个新 scope：`p2p:read` 和 `p2p:write`（把它们授予使用该市场的 API key；共享公钥不能调用其中任何一个）；付款方的路由位于 `/v1/p2p-checkout` 下（无 key：网关需要为其配置一条无 key 的前缀路由，与 `/v1/zk-checkout` 一样）；控制台的路由位于 `/v1/admin/p2p` 下。
+- **新变量，均为可选：** `P2P_MARKET_CONTRACTS_TESTNET`、`P2P_MARKET_CONTRACTS_MAINNET`、`P2P_MARKET_DEPLOY_BLOCKS_TESTNET`、`P2P_MARKET_DEPLOY_BLOCKS_MAINNET`、`P2P_RPC_URLS_TESTNET`、`P2P_RPC_URLS_MAINNET`、`P2P_MATCHER_PRIVATE_KEY`、`P2P_DATA_ENCRYPTION_KEY`、`P2P_MERCHANT_MAX_OPEN_ORDERS`、`P2P_INDEXER_INTERVAL_MS`。在 `P2P_MARKET_CONTRACTS_*` 指定某个部署之前，一切照旧；之后，该层级需要同组的其余变量，并且 `P2P_DATA_ENCRYPTION_KEY` 加入不得共用同一值的密钥之列。
+- **新错误码：** `p2p_challenge_invalid`、`p2p_signature_invalid`、`p2p_account_taken`、`p2p_no_match`。
 
 ### 支付链接：测试网沙盒
 
@@ -2443,6 +2575,16 @@ curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops"
 | `MONAD_LOG_BLOCK_RANGE` | 否 | `100` | 一次 `eth_getLogs` 可覆盖的区块数——RPC 服务商的上限（公共 RPC 允许 100） |
 | `MONAD_RELAYER_PRIVATE_KEY` | 否 | — | relayer 密钥（32 字节 hex）。设置后每个 Monad 意图都有自己的充值地址，relayer 会扣除手续费后把充值转发给商户。只存放 gas 资金：它部署的转发合约不能向其他任何人付款 |
 | `MONAD_DEPOSIT_TOKEN_FEES` | 否 | — | 每种 ERC-20 充值的 relayer 手续费，JSON `{"0xToken": "0.05"}`，以代币单位计。未配置的代币免费转发（gas 由 relayer 支付） |
+| `P2P_MARKET_CONTRACTS_TESTNET` | 否 | 无 | JSON `{"<network>":"0x…"}`：各测试网上的 P2PMarket 部署（由 `npm run p2p:deploy` 打印）。设置后即为 `dev` 密钥开启 P2P 市场；此时 `P2P_MARKET_DEPLOY_BLOCKS_TESTNET`、`P2P_MATCHER_PRIVATE_KEY` 和 `P2P_DATA_ENCRYPTION_KEY` 在启动时为必填 |
+| `P2P_MARKET_CONTRACTS_MAINNET` | 否 | 无 | 主网的同一项（`prod` 密钥）；每个网络还需要在 `P2P_RPC_URLS_MAINNET` 中配置其节点 |
+| `P2P_MARKET_DEPLOY_BLOCKS_TESTNET` | 配置测试网合约时 | 无 | JSON `{"<network>":<block>}`：索引器从哪个区块开始读取每个测试部署 |
+| `P2P_MARKET_DEPLOY_BLOCKS_MAINNET` | 配置主网合约时 | 无 | 主网的同一项 |
+| `P2P_RPC_URLS_TESTNET` | 否 | 沙盒的节点 | JSON `{"<network>":"https://…"}`：每个测试网的节点（否则用其在 `SANDBOX_RPC_URLS` 中的条目，再否则用公共节点）。使用前会按该网络的 chain id 校验 |
+| `P2P_RPC_URLS_MAINNET` | 配置主网合约时 | 无 | 运营方在每个主网网络上的节点，每个合约一个 |
+| `P2P_MATCHER_PRIVATE_KEY` | 配置合约时 | 无 | matcher 的 EVM 密钥（32 字节 hex），所有网络共用一把：只用于 gas 和 matcher 权限，绝不涉及任何人的代币。与 `MONAD_RELAYER_PRIVATE_KEY` 或 `SANDBOX_TREASURY_PRIVATE_KEY` 相同时会被拒绝 |
+| `P2P_DATA_ENCRYPTION_KEY` | 配置合约时 | 无 | 32 字节（base64 或 hex），用于静态加密封存支付信息和身份信息。必须与其他所有密钥不同；丢失它就会丢失这些信息 |
+| `P2P_MERCHANT_MAX_OPEN_ORDERS` | 否 | `5` | 单个商户账户同时承接的进行中订单数 |
+| `P2P_INDEXER_INTERVAL_MS` | 否 | `15000` | 索引器、过期任务和 matcher 跟踪器的运行间隔（仅在 `OBSERVER_ENABLED` 时） |
 | `SANDBOX_DEPOSIT_SEED` | 否 | 无 | 沙盒的 HD 种子（16 到 64 字节，hex）。与 `SANDBOX_TREASURY_PRIVATE_KEY` 一起开启沙盒：`dev` 密钥在通过充值地址付款的网络上的链接在测试网上结算。仅限测试资金 |
 | `SANDBOX_TREASURY_PRIVATE_KEY` | 否 | 无 | 沙盒金库密钥（32 字节 hex）：在 EVM 测试网上支付沙盒的付款和退款，并作为其他每个测试网上金库自有密钥的根（按网络 HKDF 派生）。绝不能是主网密钥；启动时拒绝 `MONAD_RELAYER_PRIVATE_KEY` |
 | `SANDBOX_RPC_URLS` | 否 | 测试网公共 RPC | 逗号分隔的 `net=url` 对，替换某个测试网的节点（JSON-RPC URL；`sui` 例外，为 GraphQL URL；`aptos` 为其 REST API 的 `/v1` 基础地址）。每个在被信任前都会核验其测试网的链身份 |
