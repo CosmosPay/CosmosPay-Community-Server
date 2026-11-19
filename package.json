@@ -38,7 +38,7 @@
     "plugins": "node --no-node-snapshot -r ts-node/register/transpile-only -r tsconfig-paths/register scripts/plugins.ts",
     "assets:verify": "ts-node -r tsconfig-paths/register --transpile-only scripts/verify-assets.ts",
     "import:platform-wallet-data": "ts-node -r tsconfig-paths/register --transpile-only scripts/import-platform-wallet-data.ts",
-    "contracts:compile": "ts-node -r tsconfig-paths/register --transpile-only scripts/compile-contracts.ts && prettier --write src/evm/payment-forwarder.artifact.ts src/evm/payment-split-forwarder.artifact.ts src/evm/merchant-fee-swap-router.artifact.ts src/evm/sandbox-usd.artifact.ts",
+    "contracts:compile": "ts-node -r tsconfig-paths/register --transpile-only scripts/compile-contracts.ts && prettier --write src/evm/payment-forwarder.artifact.ts src/evm/payment-split-forwarder.artifact.ts src/evm/merchant-fee-swap-router.artifact.ts src/evm/sandbox-usd.artifact.ts src/evm/p2p-market.artifact.ts",
     "sandbox:keys": "ts-node -r tsconfig-paths/register --transpile-only scripts/sandbox/generate-keys.ts",
     "sandbox:deploy-cusd": "ts-node -r tsconfig-paths/register --transpile-only scripts/sandbox/deploy-cusd.ts",
     "sandbox:status": "ts-node -r tsconfig-paths/register --transpile-only scripts/sandbox/status.ts",
@@ -76,6 +76,8 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@ethereumjs/evm": "^10.1.3",
+    "@ethereumjs/util": "^10.1.3",
     "@nestjs/cli": "^12.0.10",
     "@nestjs/schematics": "^12.0.12",
     "@nestjs/testing": "^12.3.3",
@@ -101,6 +103,7 @@
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
     "typescript-eslint": "^8.72.0",
+    "viem": "^2.58.1",
     "yaml": "^2.9.1"
   },
   "overrides": {

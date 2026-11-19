@@ -9,8 +9,8 @@ const solc = require('solc') as {
 };
 
 /**
- * Compiles every contract under `contracts/` (the deposit-address forwarders
- * and the merchant fee swap router) and writes each one's creation bytecode to
+ * Compiles every contract under `contracts/` (the deposit-address forwarders,
+ * the merchant fee swap router, cUSD and the P2P market) and writes each one's creation bytecode to
  * its artifact in `src/evm/`, which is committed.
  *
  *   npm run contracts:compile
@@ -53,6 +53,16 @@ const CONTRACTS = [
     // cUSD, the sandbox's test stablecoin. Compiled for `paris` (no PUSH0, no
     // MCOPY): it is deployed on test networks whose EVM version lags mainnet's.
     note: 'Do not edit: cUSD deployments are checked against this bytecode.',
+    evmVersion: 'paris',
+  },
+  {
+    name: 'P2PMarket',
+    exportName: 'P2P_MARKET_ARTIFACT',
+    artifact: 'p2p-market.artifact.ts',
+    // The P2P market's order book, one deployment per network. Compiled for
+    // `paris` so the same bytecode deploys on every EVM network we list,
+    // including test networks whose EVM version lags mainnet's.
+    note: 'Do not edit: P2P market deployments are checked against this bytecode.',
     evmVersion: 'paris',
   },
 ] as const;
