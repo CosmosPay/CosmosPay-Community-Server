@@ -201,6 +201,7 @@ CREATE TABLE "p2p_charge" (
     "fiatAmount" TEXT NOT NULL,
     "recipientAccountId" TEXT NOT NULL,
     "recipientAddress" TEXT NOT NULL,
+    "payeeName" TEXT NOT NULL,
     "description" TEXT,
     "multiUse" BOOLEAN NOT NULL DEFAULT false,
     "status" TEXT NOT NULL DEFAULT 'open',

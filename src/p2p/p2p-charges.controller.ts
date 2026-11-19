@@ -57,7 +57,7 @@ export class P2pChargesController {
   @ApiOperation({
     summary: 'Charge an amount of local money, paid on a hosted page',
     description:
-      'Answers `url`, the payer’s page (`PAYMENT_LINK_CHECKOUT_URL/p2p/<id>`). The payer picks a rail and gives their name, document and email; a merchant is matched and the payer transfers to it; when the merchant releases, the tokens go to `recipient` (one of your registered accounts) and `P2P_CHARGE_SUCCEEDED` is sent. One payer at a time unless `multiUse`.',
+      'Answers `url`, the payer’s page (`PAYMENT_LINK_CHECKOUT_URL/p2p/<id>`), and `qr`, a PNG of it; the page shows `payeeName` as who is charging. The payer picks a rail and gives their name, document and email; a merchant is matched and the payer transfers to it; when the merchant releases, the tokens go to `recipient` (one of your registered accounts) and `P2P_CHARGE_SUCCEEDED` is sent. One payer at a time unless `multiUse`.',
   })
   @ApiCreatedResponse({ type: P2pMarketChargeEntity })
   @ApiUpstream('EVM network')

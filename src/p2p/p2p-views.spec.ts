@@ -1,4 +1,5 @@
 import {
+  settleDeadlineOf,
   toMerchantOrderView,
   toOrderView,
   toOrderWebhookData,
@@ -108,6 +109,7 @@ describe('P2P views', () => {
         'acceptDeadline',
         'paymentDeadline',
         'paidAt',
+        'settleDeadline',
         'endedAt',
         'txHashes',
         'settlement',
@@ -167,6 +169,24 @@ describe('P2P views', () => {
     });
     expect(ended.payer).toBeNull();
     expect(ended.beneficiary).toBeNull();
+  });
+
+  it('closes the settle window settleWindow seconds after the payment, and only with one', () => {
+    const paidAt = new Date('2026-11-19T12:00:00Z');
+    expect(settleDeadlineOf({ paidAt, settleWindow: 21_600 })).toEqual(
+      new Date('2026-11-19T18:00:00Z'),
+    );
+    expect(settleDeadlineOf({ paidAt, settleWindow: 0 })).toBeNull();
+    expect(settleDeadlineOf({ paidAt: null, settleWindow: 21_600 })).toBeNull();
+    const view = toMerchantOrderView(
+      { ...ROW, kind: 'SELL', status: 'paid', paidAt, settleWindow: 21_600 },
+      84532,
+      { payer: null, beneficiary: null },
+    );
+    expect(view.settleDeadline).toEqual(new Date('2026-11-19T18:00:00Z'));
+    expect(
+      toOrderWebhookData({ ...ROW, paidAt, settleWindow: 3600 }, 1, 'client'),
+    ).toHaveProperty('settleDeadline', new Date('2026-11-19T13:00:00Z'));
   });
 
   it('never shows the client the merchant’s internal ids', () => {

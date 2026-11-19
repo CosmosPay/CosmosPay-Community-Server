@@ -42,6 +42,12 @@ export class P2pMarketChargeEntity {
   description!: string | null;
 
   @ApiProperty({
+    example: 'Tienda Salta',
+    description: 'Who the payer sees it is paying.',
+  })
+  payeeName!: string;
+
+  @ApiProperty({
     example: false,
     description:
       'Whether several payers may pay it; otherwise one order at a time, and it closes when paid.',
@@ -69,6 +75,12 @@ export class P2pMarketChargeEntity {
     description: 'The payer’s page. Share it, or show it as a QR.',
   })
   url!: string;
+
+  @ApiProperty({
+    example: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA',
+    description: 'A QR of `url`, as a PNG data URL. Derived, never stored.',
+  })
+  qr!: string;
 
   @ApiProperty({ example: '2026-11-19T12:00:00.000Z' })
   createdAt!: Date;
@@ -112,6 +124,13 @@ export class P2pCheckoutChargeEntity {
 
   @ApiProperty({ example: '25000.00' })
   fiatAmount!: string;
+
+  @ApiProperty({
+    example: 'Tienda Salta',
+    description:
+      'Who the payer is paying: the name the charge’s creator chose (`payeeName`).',
+  })
+  merchantName!: string;
 
   @ApiProperty({ type: String, nullable: true, example: 'Order #881' })
   description!: string | null;
@@ -174,7 +193,13 @@ export class P2pCheckoutOrderEntity {
   @ApiProperty({ example: 'ar_bank_transfer' })
   rail!: string;
 
-  @ApiProperty({ type: String, nullable: true, example: 'Pampa Cambio' })
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    example: 'Pampa Cambio',
+    description:
+      'The merchant the payer transfers to (it fills the order), not the charge’s payee.',
+  })
   merchantName!: string | null;
 
   @ApiProperty({
@@ -193,6 +218,15 @@ export class P2pCheckoutOrderEntity {
 
   @ApiProperty({ type: Date, nullable: true, example: null })
   paidAt!: Date | null;
+
+  @ApiProperty({
+    type: Date,
+    nullable: true,
+    example: null,
+    description:
+      'When the settle window of a paid order closes: after it anyone may release the order, and the seller’s side can no longer dispute it. Null without a settle window, or before the order is paid.',
+  })
+  settleDeadline!: Date | null;
 
   @ApiProperty({ example: '2026-11-19T12:01:00.000Z' })
   createdAt!: Date;

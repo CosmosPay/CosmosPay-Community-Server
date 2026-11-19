@@ -42,7 +42,7 @@ export class P2pMarketController {
     summary:
       'The P2P market for this API key: networks, contracts, tokens, rails, fee and matcher',
     description:
-      'Everything an integration needs on the key’s tier (a `prod` key: mainnet; a `dev` key: test networks): each network the market runs on, with its contract (checked against this service’s build), its tokens, the protocol fee and whether it is paused; the currencies and the fields of each payment rail; the order windows and the bond rate; and the matcher address a seller authorises with `setMatcher`. `available` is false, and `networks` empty, where the market does not run yet. A network whose node does not answer is left out of this answer.',
+      'Everything an integration needs on the key’s tier (a `prod` key: mainnet; a `dev` key: test networks): each network the market runs on, with its contract (checked against this service’s build), its tokens, the protocol fee, whether it is paused, and its coin, explorer and a public node for a wallet to add it; the currencies and the fields of each payment rail; the order windows and the bond rate; and the matcher address a seller authorises with `setMatcher`. `available` is false, and `networks` empty, where the market does not run yet. A network whose node does not answer is left out of this answer.',
   })
   @ApiOkResponse({ type: P2pMarketOverviewEntity })
   @ApiUpstream('EVM network')

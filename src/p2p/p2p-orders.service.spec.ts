@@ -41,6 +41,8 @@ function setup(orderRow: P2pOrderRow | null = row()) {
         ),
       ),
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      findMany: jest.fn().mockResolvedValue([]),
+      count: jest.fn().mockResolvedValue(0),
     },
   };
   const matcher = { send: jest.fn().mockResolvedValue('0xhash') };
@@ -156,6 +158,24 @@ describe('P2pOrdersService', () => {
     expect(matcher.send).toHaveBeenCalledWith(
       { network: 'base' },
       expect.objectContaining({ kind: 'cancel' }),
+    );
+  });
+
+  it('lists one wallet’s orders as buyer or seller, whatever the case it is given in', async () => {
+    const { service, prisma } = setup();
+    await service.list(CONSUMER, {
+      take: 20,
+      skip: 0,
+      address: RECIPIENT.toLowerCase(),
+    });
+    expect(prisma.p2pOrder.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          consumerId: 'consumer_client',
+          tier: 'testnet',
+          OR: [{ buyerAddress: RECIPIENT }, { sellerAddress: RECIPIENT }],
+        },
+      }),
     );
   });
 

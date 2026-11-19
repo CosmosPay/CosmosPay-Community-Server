@@ -35,6 +35,30 @@ export class P2pMarketNetworkEntity {
   chainId!: number;
 
   @ApiProperty({
+    example: 'ETH',
+    description: 'The chain’s own coin (gas), as wallets name it.',
+  })
+  nativeSymbol!: string;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    example: 'https://sepolia.basescan.org',
+    description:
+      'An Etherscan-style explorer of this network: append `/tx/<hash>` or `/address/<address>`. Null where none was checked.',
+  })
+  explorerUrl!: string | null;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    example: 'https://sepolia.base.org',
+    description:
+      'A PUBLIC node for `wallet_addEthereumChain`, from the public endpoints this service lists; never the node it reads through. Null where no public one is listed.',
+  })
+  rpcUrl!: string | null;
+
+  @ApiProperty({
     example: '0x5FbDB2315678afecb367f032d93F642f64180aa3',
     description:
       "The P2P market contract: where balances are deposited and orders lock tokens. Verified against this service's build before it is listed.",

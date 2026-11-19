@@ -126,6 +126,13 @@ export class P2pMarketBalanceEntity {
   })
   amount!: string;
 
+  @ApiProperty({
+    example: '100000000',
+    description:
+      'Base units locked in live orders: those this account sells in, plus the bonds it locked accepting as a buyer. Derived from this service’s order records (an order opened outside this API is not counted); the free balance above is read from the contract.',
+  })
+  locked!: string;
+
   @ApiProperty({ example: 6 })
   decimals!: number;
 }

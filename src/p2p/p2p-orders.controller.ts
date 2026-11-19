@@ -111,7 +111,7 @@ export class P2pOrdersController {
   @ApiOperation({
     summary: 'List the orders you created',
     description:
-      'Purchases, sales, charges’ orders and payouts, newest first, on the key’s tier, optionally by `status` and `kind`; paginated with `take` and `skip`. Payment details are left out of lists: read one order for them.',
+      'Purchases, sales, charges’ orders and payouts, newest first, on the key’s tier, optionally by `status`, `kind` and the `address` of a wallet on either side; paginated with `take` and `skip`. Payment details are left out of lists: read one order for them.',
   })
   @ApiOkResponse({ type: P2pMarketOrderListEntity })
   @P2pNetworkRefusal()

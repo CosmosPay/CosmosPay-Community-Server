@@ -192,3 +192,99 @@ describe('P2pAccountsService registration', () => {
     }
   });
 });
+
+describe('P2pAccountsService live state', () => {
+  it('sums what the account has locked per network and token, from the order rows', async () => {
+    const USDC = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
+    const row = {
+      id: 'acc0',
+      tier: 'testnet',
+      address: ADDRESS,
+      label: null,
+      displayName: 'Pampa',
+      merchantStatus: 'ACTIVE',
+      completedOrders: 0,
+      cancelledOrders: 0,
+      disputesLost: 0,
+      medianReleaseSeconds: null,
+      lastActiveAt: null,
+      verifiedAt: new Date(),
+      operators: { base: { '0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65': 2 } },
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const findMany = jest.fn().mockResolvedValue([
+      {
+        network: 'base',
+        token: USDC,
+        sellerAddress: ADDRESS,
+        tokenAmount: '100',
+        bond: '0',
+      },
+      {
+        network: 'base',
+        token: USDC,
+        sellerAddress: ADDRESS,
+        tokenAmount: '50',
+        bond: '5',
+      },
+      {
+        network: 'base',
+        token: USDC,
+        sellerAddress: '0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC',
+        tokenAmount: '200',
+        bond: '20',
+      },
+    ]);
+    const prisma = {
+      p2pAccount: { findFirst: jest.fn().mockResolvedValue(row) },
+      p2pOrder: { findMany },
+    };
+    const reader = {
+      liveDeployments: jest.fn().mockResolvedValue([
+        {
+          network: 'base',
+          tokens: [{ symbol: 'USDC', address: USDC, decimals: 6 }],
+        },
+      ]),
+      balanceOf: jest.fn().mockResolvedValue(1_000n),
+      matcherTerms: jest
+        .fn()
+        .mockResolvedValue({ maxPerOrder: 500n, autoSettle: false }),
+    };
+    const service = new P2pAccountsService(
+      prisma as never,
+      { resolveId: jest.fn().mockResolvedValue('consumer_1') } as never,
+      {
+        tierFor: () => 'testnet',
+        matcherAddress: () => '0x90F79bf6EB2c4f870365E785982E1f101E93b906',
+      } as never,
+      reader as never,
+    );
+    const account = await service.get(CONSUMER, 'acc0');
+    expect(account.networks).toEqual([
+      {
+        network: 'base',
+        balances: [
+          {
+            symbol: 'USDC',
+            token: USDC,
+            decimals: 6,
+            amount: '1000',
+            locked: '170',
+          },
+        ],
+        matcher: { maxPerOrder: '500', autoSettle: false },
+        operators: { '0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65': 2 },
+      },
+    ]);
+    // Only this tier's open orders, as seller, or accepted bonds as buyer.
+    expect(findMany.mock.calls[0][0].where).toMatchObject({
+      tier: 'testnet',
+      OR: [
+        { sellerAddress: ADDRESS },
+        { buyerAddress: ADDRESS, bond: { not: '0' } },
+      ],
+    });
+  });
+});

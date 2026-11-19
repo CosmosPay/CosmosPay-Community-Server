@@ -232,6 +232,10 @@ describe('P2P market (e2e)', () => {
             id: 'base',
             chainId: 84532,
             contract: CONTRACT,
+            nativeSymbol: 'ETH',
+            explorerUrl: 'https://sepolia.basescan.org',
+            // The public constant, never the node the service reads through.
+            rpcUrl: 'https://sepolia.base.org',
             protocolFeeBps: 50,
             tokens: [{ symbol: 'USDC' }],
           },

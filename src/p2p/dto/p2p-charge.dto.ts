@@ -64,6 +64,20 @@ export class CreateP2pMarketChargeDto {
   @MaxLength(64)
   recipient!: string;
 
+  @ApiProperty({
+    example: 'Tienda Salta',
+    minLength: 2,
+    maxLength: 60,
+    description:
+      'Who the payer is paying, as the payer page shows it (your business name). Never taken from your account.',
+  })
+  @IsString()
+  @Matches(/^[\p{L}\p{M}\p{N}][\p{L}\p{M}\p{N} .,&'()-]{1,59}$/u, {
+    message:
+      "payeeName must be 2 to 60 letters, digits, spaces and . , & ' ( ) -",
+  })
+  payeeName!: string;
+
   @ApiPropertyOptional({ example: 'Order #881', maxLength: P2P_TEXT_MAX })
   @IsOptional()
   @IsString()

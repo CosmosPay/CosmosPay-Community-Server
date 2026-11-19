@@ -7,6 +7,7 @@ import type {
   P2pMarketNetworkEntity,
   P2pMarketOverviewEntity,
 } from '@/p2p/entities/p2p-market.entity';
+import { p2pChainInfo } from '@/p2p/p2p-chain-info';
 import { P2pMarketReader } from '@/p2p/p2p-market-reader.service';
 import { P2pNetworksService } from '@/p2p/p2p-networks.service';
 import { P2P_RAILS, railsFor } from '@/p2p/p2p-rails';
@@ -48,6 +49,7 @@ export class P2pMarketService {
                 id: d.network,
                 name: d.name,
                 chainId: d.chainId,
+                ...p2pChainInfo(d.network, tier),
                 contract: d.contract,
                 protocolFeeBps: state.feeBps,
                 paused: state.paused,

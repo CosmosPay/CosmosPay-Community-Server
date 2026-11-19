@@ -7,6 +7,7 @@ import { page, type Page } from '@/common/pagination';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import type { AppConfig, StellarNetwork } from '@/config/configuration';
 import { PrismaService } from '@/prisma/prisma.service';
+import { sep7Qr } from '@/stellar/sep7';
 import type {
   CreateP2pMarketChargeDto,
   QueryP2pMarketChargesDto,
@@ -63,11 +64,14 @@ export class P2pChargesService {
     );
   }
 
-  view(row: P2pChargeRow): P2pMarketChargeEntity {
+  /** A charge as its creator reads it, with a QR of its payer page (derived, never stored). */
+  async view(row: P2pChargeRow): Promise<P2pMarketChargeEntity> {
+    const checkoutUrl = this.config.get('p2p', { infer: true }).checkoutUrl;
     return toChargeView(
       row,
       this.symbolOf(row),
-      this.config.get('p2p', { infer: true }).checkoutUrl,
+      checkoutUrl,
+      await sep7Qr(`${checkoutUrl}/${row.id}`),
       new Date(),
     );
   }
@@ -112,6 +116,7 @@ export class P2pChargesService {
         ),
         recipientAccountId: recipient.id,
         recipientAddress: recipient.address,
+        payeeName: dto.payeeName.trim(),
         description: dto.description?.trim() || null,
         multiUse: dto.multiUse ?? false,
         expiresAt,
@@ -138,11 +143,7 @@ export class P2pChargesService {
       }),
       this.prisma.p2pCharge.count({ where }),
     ]);
-    return page(
-      rows.map((r) => this.view(r)),
-      total,
-      query,
-    );
+    return page(await Promise.all(rows.map((r) => this.view(r))), total, query);
   }
 
   private async owned(consumerId: string, tier: StellarNetwork, id: string) {
@@ -214,7 +215,7 @@ export class P2pChargesService {
       select: P2P_CHARGE_SELECT,
     });
     await this.webhooks.chargeSucceeded(charge.consumerId, {
-      ...this.view(now),
+      ...(await this.view(now)),
       orderId: order.id,
     });
   }

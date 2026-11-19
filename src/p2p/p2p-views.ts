@@ -239,6 +239,20 @@ export function isLive(status: string): boolean {
   return P2P_LIVE_STATUSES.includes(status as P2pOrderStatus);
 }
 
+/**
+ * When a paid order's settle window closes: from then on anyone may release
+ * it, and the seller's side may no longer dispute it. Null without a window,
+ * or before the order is paid.
+ */
+export function settleDeadlineOf(row: {
+  paidAt: Date | null;
+  settleWindow: number;
+}): Date | null {
+  return row.paidAt && row.settleWindow > 0
+    ? new Date(row.paidAt.getTime() + row.settleWindow * 1000)
+    : null;
+}
+
 function txHashes(row: P2pOrderRow) {
   return {
     open: row.openTxHash,
@@ -297,6 +311,7 @@ export function toOrderView(
     acceptDeadline: row.acceptDeadline,
     paymentDeadline: row.paymentDeadline,
     paidAt: row.paidAt,
+    settleDeadline: settleDeadlineOf(row),
     endedAt: row.endedAt,
     txHashes: txHashes(row),
     settlement: settlementOf(row.settlement),
@@ -346,6 +361,7 @@ export function toMerchantOrderView(
     acceptDeadline: row.acceptDeadline,
     paymentDeadline: row.paymentDeadline,
     paidAt: row.paidAt,
+    settleDeadline: settleDeadlineOf(row),
     endedAt: row.endedAt,
     txHashes: txHashes(row),
     settlement: settlementOf(row.settlement),
@@ -373,6 +389,7 @@ export function toCheckoutOrderView(
     paymentDeadline: row.paymentDeadline,
     paymentDetails: isLive(row.status) ? paymentDetails : null,
     paidAt: row.paidAt,
+    settleDeadline: settleDeadlineOf(row),
     createdAt: row.createdAt,
   };
 }
@@ -409,6 +426,7 @@ export const P2P_CLIENT_WEBHOOK_KEYS = [
   'acceptDeadline',
   'paymentDeadline',
   'paidAt',
+  'settleDeadline',
   'endedAt',
   'txHashes',
   'settlement',
@@ -453,6 +471,7 @@ export const P2P_MERCHANT_WEBHOOK_KEYS = [
   'acceptDeadline',
   'paymentDeadline',
   'paidAt',
+  'settleDeadline',
   'endedAt',
   'txHashes',
   'settlement',
@@ -500,6 +519,7 @@ export const P2P_CHARGE_SELECT = {
   recipientAccountId: true,
   recipientAddress: true,
   description: true,
+  payeeName: true,
   multiUse: true,
   status: true,
   paidCount: true,
@@ -521,6 +541,7 @@ export function toChargeView(
   row: P2pChargeRow,
   tokenSymbol: string,
   checkoutUrl: string,
+  qr: string,
   now: Date,
 ): P2pMarketChargeEntity {
   return {
@@ -536,10 +557,12 @@ export function toChargeView(
     description: row.description,
     multiUse: row.multiUse,
     status: chargeStatus(row, now),
+    payeeName: row.payeeName,
     paidCount: row.paidCount,
     paidAt: row.paidAt,
     expiresAt: row.expiresAt,
     url: `${checkoutUrl}/${row.id}`,
+    qr,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };

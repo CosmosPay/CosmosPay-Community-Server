@@ -202,7 +202,10 @@ export class P2pAccountsService {
     tier: StellarNetwork,
   ): Promise<P2pMarketAccountNetworkEntity[]> {
     const matcher = this.networks.matcherAddress();
-    const deployments = await this.reader.liveDeployments(tier);
+    const [deployments, locked] = await Promise.all([
+      this.reader.liveDeployments(tier),
+      this.lockedByToken(row.address, tier),
+    ]);
     const seen = (row.operators ?? {}) as Record<
       string,
       Record<string, number> | undefined
@@ -218,6 +221,9 @@ export class P2pAccountsService {
                 decimals: t.decimals,
                 amount: (
                   await this.reader.balanceOf(d, row.address, t.address, true)
+                ).toString(),
+                locked: (
+                  locked.get(`${d.network}:${t.address}`) ?? 0n
                 ).toString(),
               })),
             ),
@@ -247,6 +253,54 @@ export class P2pAccountsService {
       }),
     );
     return results.flat();
+  }
+
+  /**
+   * What `address` has locked in live orders, per `network:token`, from this
+   * service's own order rows: the amount of each order it sells in (open
+   * on-chain: acceptance, payment, paid, disputed), plus the bond of each it
+   * accepted as the buyer. An order opened outside this API is not counted:
+   * the contract's own free balance is the authority.
+   */
+  private async lockedByToken(
+    address: string,
+    tier: StellarNetwork,
+  ): Promise<Map<string, bigint>> {
+    const open = [
+      'awaiting_acceptance',
+      'awaiting_payment',
+      'paid',
+      'disputed',
+    ];
+    const accepted = ['awaiting_payment', 'paid', 'disputed'];
+    const rows = await this.prisma.p2pOrder.findMany({
+      where: {
+        tier,
+        OR: [
+          { sellerAddress: address, status: { in: open } },
+          {
+            buyerAddress: address,
+            status: { in: accepted },
+            bond: { not: '0' },
+          },
+        ],
+      },
+      select: {
+        network: true,
+        token: true,
+        sellerAddress: true,
+        tokenAmount: true,
+        bond: true,
+      },
+    });
+    const totals = new Map<string, bigint>();
+    for (const o of rows) {
+      const key = `${o.network}:${o.token}`;
+      const part =
+        o.sellerAddress === address ? BigInt(o.tokenAmount) : BigInt(o.bond);
+      totals.set(key, (totals.get(key) ?? 0n) + part);
+    }
+    return totals;
   }
 
   async update(

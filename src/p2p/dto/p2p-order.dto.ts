@@ -236,4 +236,13 @@ export class QueryP2pMarketOrdersDto extends PaginationQueryDto {
   @IsOptional()
   @IsIn(P2P_ORDER_KINDS)
   kind?: string;
+
+  @ApiPropertyOptional({
+    example: '0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC',
+    description:
+      'Only orders where this wallet is the buyer or the seller (any case).',
+  })
+  @IsOptional()
+  @Matches(EVM_ADDRESS_PATTERN, { message: 'address must be an EVM address' })
+  address?: string;
 }

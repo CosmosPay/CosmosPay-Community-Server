@@ -58,6 +58,13 @@ import {
 /** The matcher acts for the buyer only on the orders it opened for a person or a payer. */
 const MATCHER_BUYER_KINDS: readonly P2pOrderKind[] = ['BUY', 'CHARGE'];
 
+/** Orders where `address` is the buyer or the seller, EIP-55 like every stored address. */
+function addressFilter(address: string | undefined) {
+  if (!address) return {};
+  const wallet = toChecksumAddress(address);
+  return { OR: [{ buyerAddress: wallet }, { sellerAddress: wallet }] };
+}
+
 /** A sealed payer identity, as the merchant reads it. */
 interface SealedPayer {
   name: string;
@@ -389,6 +396,7 @@ export class P2pOrdersService {
       tier,
       ...(query.status ? { status: query.status } : {}),
       ...(query.kind ? { kind: query.kind } : {}),
+      ...addressFilter(query.address),
     };
     const [rows, total] = await Promise.all([
       this.prisma.p2pOrder.findMany({
@@ -536,6 +544,7 @@ export class P2pOrdersService {
       tier,
       ...(query.status ? { status: query.status } : {}),
       ...(query.kind ? { kind: query.kind } : {}),
+      ...addressFilter(query.address),
     };
     const [rows, total] = await Promise.all([
       this.prisma.p2pOrder.findMany({

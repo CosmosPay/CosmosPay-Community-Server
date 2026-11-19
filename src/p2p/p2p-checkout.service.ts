@@ -132,6 +132,7 @@ export class P2pCheckoutService {
         d?.tokens.find((t) => t.address === row.token)?.symbol ?? row.token,
       currency: row.currency,
       fiatAmount: row.fiatAmount,
+      merchantName: row.payeeName,
       description: row.description,
       status: chargeStatus(row, new Date()),
       rails: railsFor(row.currency).filter((r) => offeredRails.has(r)),

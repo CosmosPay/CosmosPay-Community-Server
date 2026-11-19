@@ -205,6 +205,15 @@ export class P2pMarketOrderEntity {
   @ApiProperty({ type: Date, nullable: true, example: null })
   paidAt!: Date | null;
 
+  @ApiProperty({
+    type: Date,
+    nullable: true,
+    example: null,
+    description:
+      'When the settle window of a paid order closes: after it anyone may release the order, and the seller’s side can no longer dispute it. Null without a settle window, or before the order is paid.',
+  })
+  settleDeadline!: Date | null;
+
   @ApiProperty({ type: Date, nullable: true, example: null })
   endedAt!: Date | null;
 
@@ -413,6 +422,15 @@ export class P2pMarketMerchantOrderEntity {
     example: '2026-11-19T12:12:40.000Z',
   })
   paidAt!: Date | null;
+
+  @ApiProperty({
+    type: Date,
+    nullable: true,
+    example: null,
+    description:
+      'When the settle window of a paid order closes: after it anyone may release the order, and the seller’s side can no longer dispute it. Null without a settle window, or before the order is paid.',
+  })
+  settleDeadline!: Date | null;
 
   @ApiProperty({ type: Date, nullable: true, example: null })
   endedAt!: Date | null;

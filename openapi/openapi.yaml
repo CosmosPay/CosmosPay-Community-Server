@@ -16367,11 +16367,12 @@ paths:
         Everything an integration needs on the key’s tier (a `prod` key:
         mainnet; a `dev` key: test networks): each network the market runs on,
         with its contract (checked against this service’s build), its tokens,
-        the protocol fee and whether it is paused; the currencies and the fields
-        of each payment rail; the order windows and the bond rate; and the
-        matcher address a seller authorises with `setMatcher`. `available` is
-        false, and `networks` empty, where the market does not run yet. A
-        network whose node does not answer is left out of this answer.
+        the protocol fee, whether it is paused, and its coin, explorer and a
+        public node for a wallet to add it; the currencies and the fields of
+        each payment rail; the order windows and the bond rate; and the matcher
+        address a seller authorises with `setMatcher`. `available` is false, and
+        `networks` empty, where the market does not run yet. A network whose
+        node does not answer is left out of this answer.
 
 
         Requires the `p2p:read` scope.
@@ -17758,8 +17759,9 @@ paths:
     get:
       description: >-
         Purchases, sales, charges’ orders and payouts, newest first, on the
-        key’s tier, optionally by `status` and `kind`; paginated with `take` and
-        `skip`. Payment details are left out of lists: read one order for them.
+        key’s tier, optionally by `status`, `kind` and the `address` of a wallet
+        on either side; paginated with `take` and `skip`. Payment details are
+        left out of lists: read one order for them.
 
 
         Requires the `p2p:read` scope.
@@ -17808,6 +17810,13 @@ paths:
               - SELL
               - CHARGE
               - PAYOUT
+        - name: address
+          required: false
+          in: query
+          description: Only orders where this wallet is the buyer or the seller (any case).
+          schema:
+            example: "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC"
+            type: string
       responses:
         "200":
           description: OK
@@ -18260,6 +18269,13 @@ paths:
               - SELL
               - CHARGE
               - PAYOUT
+        - name: address
+          required: false
+          in: query
+          description: Only orders where this wallet is the buyer or the seller (any case).
+          schema:
+            example: "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC"
+            type: string
       responses:
         "200":
           description: OK
@@ -18414,7 +18430,8 @@ paths:
   /v1/p2p/charges:
     post:
       description: >-
-        Answers `url`, the payer’s page (`PAYMENT_LINK_CHECKOUT_URL/p2p/<id>`).
+        Answers `url`, the payer’s page (`PAYMENT_LINK_CHECKOUT_URL/p2p/<id>`),
+        and `qr`, a PNG of it; the page shows `payeeName` as who is charging.
         The payer picks a rail and gives their name, document and email; a
         merchant is matched and the payer transfers to it; when the merchant
         releases, the tokens go to `recipient` (one of your registered accounts)
@@ -35782,6 +35799,23 @@ components:
           type: number
           example: 84532
           description: Its EIP-155 chain id.
+        nativeSymbol:
+          type: string
+          example: ETH
+          description: The chain’s own coin (gas), as wallets name it.
+        explorerUrl:
+          type: string
+          nullable: true
+          example: https://sepolia.basescan.org
+          description: "An Etherscan-style explorer of this network: append `/tx/<hash>`
+            or `/address/<address>`. Null where none was checked."
+        rpcUrl:
+          type: string
+          nullable: true
+          example: https://sepolia.base.org
+          description: A PUBLIC node for `wallet_addEthereumChain`, from the public
+            endpoints this service lists; never the node it reads through. Null
+            where no public one is listed.
         contract:
           type: string
           example: "0x5FbDB2315678afecb367f032d93F642f64180aa3"
@@ -35810,6 +35844,9 @@ components:
         - id
         - name
         - chainId
+        - nativeSymbol
+        - explorerUrl
+        - rpcUrl
         - contract
         - protocolFeeBps
         - paused
@@ -36219,6 +36256,13 @@ components:
           example: "250000000"
           description: "Free balance in base units: what new orders can lock and what can
             be withdrawn."
+        locked:
+          type: string
+          example: "100000000"
+          description: "Base units locked in live orders: those this account sells in,
+            plus the bonds it locked accepting as a buyer. Derived from this
+            service’s order records (an order opened outside this API is not
+            counted); the free balance above is read from the contract."
         decimals:
           type: number
           example: 6
@@ -36227,6 +36271,7 @@ components:
         - symbol
         - token
         - amount
+        - locked
         - decimals
     P2pMarketMatcherTermsEntity:
       type: object
@@ -37313,6 +37358,14 @@ components:
           type: string
           nullable: true
           example: null
+        settleDeadline:
+          format: date-time
+          type: string
+          nullable: true
+          example: null
+          description: "When the settle window of a paid order closes: after it anyone may
+            release the order, and the seller’s side can no longer dispute it.
+            Null without a settle window, or before the order is paid."
         endedAt:
           format: date-time
           type: string
@@ -37397,6 +37450,7 @@ components:
         - acceptDeadline
         - paymentDeadline
         - paidAt
+        - settleDeadline
         - endedAt
         - txHashes
         - settlement
@@ -37523,6 +37577,14 @@ components:
           type: string
           nullable: true
           example: null
+        settleDeadline:
+          format: date-time
+          type: string
+          nullable: true
+          example: null
+          description: "When the settle window of a paid order closes: after it anyone may
+            release the order, and the seller’s side can no longer dispute it.
+            Null without a settle window, or before the order is paid."
         endedAt:
           format: date-time
           type: string
@@ -37605,6 +37667,7 @@ components:
         - acceptDeadline
         - paymentDeadline
         - paidAt
+        - settleDeadline
         - endedAt
         - txHashes
         - settlement
@@ -37795,6 +37858,14 @@ components:
           type: string
           nullable: true
           example: 2026-11-19T12:12:40.000Z
+        settleDeadline:
+          format: date-time
+          type: string
+          nullable: true
+          example: null
+          description: "When the settle window of a paid order closes: after it anyone may
+            release the order, and the seller’s side can no longer dispute it.
+            Null without a settle window, or before the order is paid."
         endedAt:
           format: date-time
           type: string
@@ -37859,6 +37930,7 @@ components:
         - acceptDeadline
         - paymentDeadline
         - paidAt
+        - settleDeadline
         - endedAt
         - txHashes
         - settlement
@@ -38010,6 +38082,13 @@ components:
           example: cm3p2pacc0001l70g8v5q3z2w
           description: "One of your registered accounts, by id or by address: where the
             tokens go."
+        payeeName:
+          type: string
+          example: Tienda Salta
+          minLength: 2
+          maxLength: 60
+          description: Who the payer is paying, as the payer page shows it (your business
+            name). Never taken from your account.
         description:
           type: string
           example: "Order #881"
@@ -38032,6 +38111,7 @@ components:
         - network
         - token
         - recipient
+        - payeeName
     P2pMarketChargeEntity:
       type: object
       properties:
@@ -38069,6 +38149,10 @@ components:
           type: string
           nullable: true
           example: "Order #881"
+        payeeName:
+          type: string
+          example: Tienda Salta
+          description: Who the payer sees it is paying.
         multiUse:
           type: boolean
           example: false
@@ -38100,6 +38184,10 @@ components:
           type: string
           example: https://pay.cosmospay.lat/p2p/9b7e2c41-3f5a-4d8e-a1b2-c3d4e5f60718
           description: The payer’s page. Share it, or show it as a QR.
+        qr:
+          type: string
+          example: data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA
+          description: A QR of `url`, as a PNG data URL. Derived, never stored.
         createdAt:
           format: date-time
           type: string
@@ -38122,12 +38210,14 @@ components:
         - recipientAccountId
         - recipientAddress
         - description
+        - payeeName
         - multiUse
         - status
         - paidCount
         - paidAt
         - expiresAt
         - url
+        - qr
         - createdAt
         - updatedAt
     P2pMarketChargeListEntity:
@@ -38363,6 +38453,11 @@ components:
         fiatAmount:
           type: string
           example: "25000.00"
+        merchantName:
+          type: string
+          example: Tienda Salta
+          description: "Who the payer is paying: the name the charge’s creator chose
+            (`payeeName`)."
         description:
           type: string
           nullable: true
@@ -38394,6 +38489,7 @@ components:
         - tokenSymbol
         - currency
         - fiatAmount
+        - merchantName
         - description
         - status
         - rails
@@ -38473,6 +38569,8 @@ components:
           type: string
           nullable: true
           example: Pampa Cambio
+          description: The merchant the payer transfers to (it fills the order), not the
+            charge’s payee.
         paymentDeadline:
           format: date-time
           type: string
@@ -38489,6 +38587,14 @@ components:
           type: string
           nullable: true
           example: null
+        settleDeadline:
+          format: date-time
+          type: string
+          nullable: true
+          example: null
+          description: "When the settle window of a paid order closes: after it anyone may
+            release the order, and the seller’s side can no longer dispute it.
+            Null without a settle window, or before the order is paid."
         createdAt:
           format: date-time
           type: string
@@ -38511,6 +38617,7 @@ components:
         - paymentDeadline
         - paymentDetails
         - paidAt
+        - settleDeadline
         - createdAt
         - payerToken
     P2pCheckoutOrderEntity:
@@ -38549,6 +38656,8 @@ components:
           type: string
           nullable: true
           example: Pampa Cambio
+          description: The merchant the payer transfers to (it fills the order), not the
+            charge’s payee.
         paymentDeadline:
           format: date-time
           type: string
@@ -38565,6 +38674,14 @@ components:
           type: string
           nullable: true
           example: null
+        settleDeadline:
+          format: date-time
+          type: string
+          nullable: true
+          example: null
+          description: "When the settle window of a paid order closes: after it anyone may
+            release the order, and the seller’s side can no longer dispute it.
+            Null without a settle window, or before the order is paid."
         createdAt:
           format: date-time
           type: string
@@ -38582,6 +38699,7 @@ components:
         - paymentDeadline
         - paymentDetails
         - paidAt
+        - settleDeadline
         - createdAt
     ApiErrorBodyEntity:
       type: object

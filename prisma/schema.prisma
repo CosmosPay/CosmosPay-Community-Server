@@ -3119,6 +3119,8 @@ model P2pCharge {
   fiatAmount         String
   recipientAccountId String
   recipientAddress   String
+  // The name the payer sees as who charges them, chosen by the creator.
+  payeeName          String
   description        String?
   // Several payers may pay it (one live order each); otherwise one at a time.
   multiUse           Boolean   @default(false)
