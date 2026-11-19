@@ -60,6 +60,16 @@ import {
 } from '@/config/sandbox-env';
 import type { PaymentNetwork } from '@/payment-intents/payment-networks';
 import {
+  P2P_DATA_KEY_ENV,
+  P2P_MATCHER_KEY_ENV,
+  readP2pTierEnv,
+  type P2pTierEnv,
+} from '@/config/p2p-env';
+import {
+  P2P_DEFAULT_INDEXER_INTERVAL_MS,
+  P2P_DEFAULT_MERCHANT_MAX_OPEN_ORDERS,
+} from '@/p2p/p2p.constants';
+import {
   isNativePluginSlug,
   type NativePluginSlug,
 } from '@/plugins/plugins.constants';
@@ -401,6 +411,26 @@ export interface AppConfig {
     /** Where cUSD is deployed, per network (`SANDBOX_CUSD_ADDRESSES`). */
     cusdAddresses: Partial<Record<PaymentNetwork, string>>;
     timeoutMs: number;
+  };
+  /**
+   * The P2P market (`src/p2p/`): one `P2PMarket` deployment per EVM network and
+   * tier. Off on a tier (every route `network_unsupported`) until its
+   * `P2P_MARKET_CONTRACTS_*` is set; `src/config/p2p-env.ts` refuses half a set.
+   */
+  p2p: {
+    tiers: Record<StellarNetwork, P2pTierEnv>;
+    /** The matcher's secp256k1 key (0x + 64 hex): gas and matcher authority only. */
+    matcherPrivateKey: string;
+    /** 32 bytes (base64 or hex) sealing payment details and identities at rest. */
+    dataEncryptionKey: string;
+    /** Live orders one merchant account takes at once (`P2P_MERCHANT_MAX_OPEN_ORDERS`). */
+    merchantMaxOpenOrders: number;
+    /** How often the indexer, the expiry job and the matcher follower tick. */
+    indexerIntervalMs: number;
+    /** Per JSON-RPC call to an EVM node. */
+    timeoutMs: number;
+    /** Where a charge's payer page lives: `<PAYMENT_LINK_CHECKOUT_URL>/p2p`. */
+    checkoutUrl: string;
   };
   /** The dashboard's analytics reads. */
   analytics: {
@@ -1073,6 +1103,33 @@ export default (): AppConfig => ({
         String(DEFAULT_SANDBOX_RPC_TIMEOUT_MS),
       10,
     ),
+  },
+  p2p: {
+    tiers: {
+      public: readP2pTierEnv(process.env, 'public'),
+      testnet: readP2pTierEnv(process.env, 'testnet'),
+    },
+    matcherPrivateKey: process.env[P2P_MATCHER_KEY_ENV]?.trim() ?? '',
+    dataEncryptionKey: process.env[P2P_DATA_KEY_ENV]?.trim() ?? '',
+    merchantMaxOpenOrders: parseInt(
+      process.env.P2P_MERCHANT_MAX_OPEN_ORDERS ??
+        String(P2P_DEFAULT_MERCHANT_MAX_OPEN_ORDERS),
+      10,
+    ),
+    indexerIntervalMs: parseInt(
+      process.env.P2P_INDEXER_INTERVAL_MS ??
+        String(P2P_DEFAULT_INDEXER_INTERVAL_MS),
+      10,
+    ),
+    timeoutMs: parseInt(
+      process.env.SANDBOX_RPC_TIMEOUT_MS ??
+        String(DEFAULT_SANDBOX_RPC_TIMEOUT_MS),
+      10,
+    ),
+    checkoutUrl: `${(
+      process.env.PAYMENT_LINK_CHECKOUT_URL?.trim() ||
+      DEFAULT_PAYMENT_LINK_CHECKOUT_URL
+    ).replace(/\/+$/, '')}/p2p`,
   },
   analytics: {
     cacheTtlMs: parseInt(

@@ -247,6 +247,10 @@ const TAG_DESCRIPTIONS: Record<string, string> = {
     'Yield vaults on Stellar: discover vaults, read a balance, build a deposit or withdrawal, submit it.',
   'Protected payments':
     'Payments held until delivery: the buyer pays USDC into a protected-payment contract and it is released to the merchant on the terms the merchant chose.',
+  'p2p-market':
+    'The P2P market: stablecoins traded for local money between people and merchants, locked in Cosmos Pay’s own contract on every EVM network it is deployed on. Wallets, payment methods, offers, quotes, orders, charges, payouts, and the transactions your wallets and bots sign.',
+  'p2p-checkout':
+    'The payer’s half of a P2P charge, without an API key: read the charge, start paying it, read the order with its payer token, report the transfer.',
   'Protected payment links':
     'The buyer’s side of a protected payment, without an API key: read it, fund it, confirm delivery, release or dispute it.',
 };
@@ -386,6 +390,9 @@ const UPSTREAM_FAILURES: Record<
     'UpstreamUnavailable',
     'UpstreamTimeout',
   ],
+  // A JSON-RPC node, like Solana and Monad: a refusal is a 502, an outage a
+  // 503, a slow node a 504.
+  'EVM network': ['UpstreamError', 'UpstreamUnavailable', 'UpstreamTimeout'],
 };
 
 const RESPONSE_STATUS: Record<SharedErrorResponse, number> = {

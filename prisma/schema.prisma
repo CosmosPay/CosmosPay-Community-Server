@@ -70,6 +70,14 @@ model Consumer {
   // Plugins this consumer installed (and consented to).
   pluginInstallations PluginInstallation[]
 
+  // The P2P market (`src/p2p/`): wallets it registered, the quotes, orders,
+  // charges and payout batches it created.
+  p2pAccounts      P2pAccount[]
+  p2pQuotes        P2pQuote[]
+  p2pOrders        P2pOrder[]
+  p2pCharges       P2pCharge[]
+  p2pPayoutBatches P2pPayoutBatch[]
+
   @@map("consumer")
 }
 
@@ -237,6 +245,21 @@ enum WebhookEventType {
   PROTECTED_PAYMENT_DEADLINE_PASSED
   PROTECTED_PAYMENT_EXPIRED
   PROTECTED_PAYMENT_CANCELLED
+
+  // The P2P market (`src/p2p/`, appended by `20261119120000_p2p_market`).
+  // COMPLETED, CANCELLED, EXPIRED, RESOLVED, FAILED, CHARGE_SUCCEEDED and
+  // PAYOUT_BATCH_COMPLETED are terminal (`TERMINAL_WEBHOOK_EVENTS`).
+  P2P_ORDER_CREATED
+  P2P_ORDER_ACCEPTED
+  P2P_ORDER_PAID
+  P2P_ORDER_COMPLETED
+  P2P_ORDER_CANCELLED
+  P2P_ORDER_EXPIRED
+  P2P_ORDER_DISPUTED
+  P2P_ORDER_RESOLVED
+  P2P_ORDER_FAILED
+  P2P_CHARGE_SUCCEEDED
+  P2P_PAYOUT_BATCH_COMPLETED
 }
 
 enum WebhookDeliveryStatus {
@@ -2838,4 +2861,344 @@ model PaymentPayerSession {
 
   @@index([intentId, createdAt])
   @@map("payment_payer_session")
+}
+
+// ---------------------------------------------------------------------------
+// The P2P market (`src/p2p/`): stablecoins traded against local money between
+// people and merchants, settled by Cosmos Pay's own `contracts/P2PMarket.sol`
+// on EVM networks. Non-custodial: every token is locked in the contract, every
+// key that moves one is its owner's, and this service signs only as the
+// MATCHER (gas and the authority sellers granted it). `tier` is the API key's
+// network ('public' | 'testnet'); `network` is the EVM network id ('base').
+// ---------------------------------------------------------------------------
+
+// A wallet a consumer proved it holds (EIP-191 signature over a single-use
+// challenge). Merchants trade from one; clients pay out from one and charge to
+// one. One address belongs to one consumer per tier, so an order's merchant
+// and a payout's seller are never ambiguous.
+model P2pAccount {
+  id         String   @id @default(cuid())
+  consumerId String
+  consumer   Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+  tier       String
+  // EIP-55.
+  address    String
+  label      String?
+  verifiedAt DateTime
+
+  // The merchant profile, shown on quotes (never the address): a name, and
+  // whether it takes orders. SUSPENDED is set by the platform only.
+  displayName          String?
+  merchantStatus       String    @default("ACTIVE")
+  completedOrders      Int       @default(0)
+  // Orders the merchant had to act on and did not (`merchantAtFault`).
+  cancelledOrders      Int       @default(0)
+  disputesLost         Int       @default(0)
+  medianReleaseSeconds Int?
+  lastActiveAt         DateTime?
+  // What the indexer saw this account grant: { "<network>": { "<operator>": bits } }.
+  operators            Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  paymentMethods P2pPaymentMethod[]
+  offers         P2pOffer[]
+  merchantOrders P2pOrder[]         @relation("P2pOrderMerchant")
+
+  @@unique([tier, address])
+  @@index([consumerId, tier, createdAt])
+  @@map("p2p_account")
+}
+
+// A registration challenge: the text the wallet signs names the consumer, the
+// address, the purpose and the expiry. Used once (`usedAt`, a compare-and-swap).
+model P2pAccountChallenge {
+  id         String    @id @default(cuid())
+  consumerId String
+  tier       String
+  address    String
+  nonce      String    @unique
+  expiresAt  DateTime
+  usedAt     DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([expiresAt])
+  @@map("p2p_account_challenge")
+}
+
+// Where an account receives local money on one rail. `details` and
+// `holderName` are sealed at rest (P2P_DATA_ENCRYPTION_KEY, AES-256-GCM with
+// the row's id as associated data) and shown only to the owner and to the
+// counterparty of a live order.
+model P2pPaymentMethod {
+  id         String     @id @default(cuid())
+  accountId  String
+  account    P2pAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  consumerId String
+  tier       String
+  currency   String
+  rail       String
+  details    String
+  holderName String
+  label      String?
+  active     Boolean    @default(true)
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+
+  @@index([consumerId, tier, createdAt])
+  @@index([accountId, rail, currency, active])
+  @@map("p2p_payment_method")
+}
+
+// A merchant's standing price on one network, token, currency and side.
+// SELL_TOKEN: the merchant sells tokens (a person buys); BUY_TOKEN: the
+// merchant buys them (a person sells, a client pays out). A price older than
+// `priceTtlSeconds` is never matched: the merchant's bot refreshes it.
+model P2pOffer {
+  id              String     @id @default(cuid())
+  accountId       String
+  account         P2pAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  consumerId      String
+  tier            String
+  side            String
+  network         String
+  token           String
+  currency        String
+  rails           String[]
+  // Local money per one token, decimal.
+  price           String
+  priceUpdatedAt  DateTime
+  priceTtlSeconds Int
+  // Local money bounds per order, decimal.
+  minFiat         String
+  maxFiat         String
+  active          Boolean    @default(true)
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  @@index([tier, network, token, currency, side, active])
+  @@index([consumerId, tier, createdAt])
+  @@map("p2p_offer")
+}
+
+// A firm price for a minute: the merchant, the amounts and the fees an order
+// created from it will carry.
+model P2pQuote {
+  id                String   @id @default(cuid())
+  consumerId        String
+  consumer          Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+  tier              String
+  // The person's side: BUY (they receive tokens) or SELL (they send them).
+  side              String
+  network           String
+  token             String
+  currency          String
+  rail              String
+  offerId           String
+  merchantAccountId String
+  price             String
+  fiatAmount        String
+  // Base units: what the order locks, and what its buyer receives after fees.
+  tokenAmount       String
+  netAmount         String
+  protocolFeeBps    Int
+  protocolFee       String
+  integratorFeeBps  Int
+  integratorFee     String
+  integratorAddress String?
+  bond              String
+  expiresAt         DateTime
+  createdAt         DateTime @default(now())
+
+  @@index([consumerId, tier, createdAt])
+  @@index([expiresAt])
+  @@map("p2p_quote")
+}
+
+// One trade, mirrored from the contract. The id is a uuid made here, and `ref`
+// (keccak-256 of its 16 bytes) is the reference the contract stores; the
+// indexer moves `status` only on indexed events, with compare-and-swap writes.
+model P2pOrder {
+  id                      String          @id
+  ref                     String          @unique
+  consumerId              String
+  consumer                Consumer        @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+  tier                    String
+  // BUY | SELL | CHARGE | PAYOUT
+  kind                    String
+  network                 String
+  contract                String
+  token                   String
+  tokenSymbol             String
+  tokenDecimals           Int
+  merchantAccountId       String?
+  merchantAccount         P2pAccount?     @relation("P2pOrderMerchant", fields: [merchantAccountId], references: [id], onDelete: SetNull)
+  // The merchant's consumer, for its own views and its webhooks.
+  merchantConsumerId      String
+  merchantAddress         String
+  merchantDisplayName     String?
+  merchantPaymentMethodId String?
+  offerId                 String?
+  // The offer as it was matched: price, bounds, rails.
+  offerSnapshot           Json
+  quoteId                 String?         @unique
+  price                   String
+  fiatAmount              String
+  currency                String
+  rail                    String
+  // Base units.
+  tokenAmount             String
+  netAmount               String
+  protocolFeeBps          Int
+  integratorFeeBps        Int
+  integratorAddress       String?
+  sellerAddress           String
+  buyerAddress            String
+  bond                    String
+  acceptWindow            Int
+  paymentWindow           Int
+  settleWindow            Int
+  // Who must open it: the matcher, or the person selling (`openWithDeposit`).
+  openerAddress           String
+  onchainId               String?
+  chainStatus             String?
+  status                  String          @default("pending")
+  acceptDeadline          DateTime?
+  paymentDeadline         DateTime?
+  paidAt                  DateTime?
+  endedAt                 DateTime?
+  openTxHash              String?
+  acceptTxHash            String?
+  paidTxHash              String?
+  releaseTxHash           String?
+  cancelTxHash            String?
+  disputeTxHash           String?
+  resolveTxHash           String?
+  // What the order paid out when it ended: { toBuyer, toSeller, bondToSeller, protocolFee, integratorFee }.
+  settlement              Json?
+  // Sealed at rest: the payer's identity (purchases, charges) and the
+  // beneficiary's account (sales, payouts), shown only to the merchant of a
+  // live order.
+  payerInfo               String?
+  beneficiary             String?
+  paidReference           String?
+  failureReason           String?
+  chargeId                String?
+  charge                  P2pCharge?      @relation(fields: [chargeId], references: [id], onDelete: SetNull)
+  payoutBatchId           String?
+  payoutBatch             P2pPayoutBatch? @relation(fields: [payoutBatchId], references: [id], onDelete: SetNull)
+  externalReference       String?
+  // A checkout order's payer session: SHA-256 of its token, and its client (HMAC).
+  payerTokenHash          String?         @unique
+  clientKey               String?
+  createdAt               DateTime        @default(now())
+  updatedAt               DateTime        @updatedAt
+
+  @@unique([tier, network, contract, onchainId])
+  @@index([consumerId, tier, createdAt])
+  @@index([merchantConsumerId, tier, createdAt])
+  @@index([merchantAccountId, status])
+  @@index([status, updatedAt])
+  @@index([chargeId, status])
+  @@index([payoutBatchId])
+  @@map("p2p_order")
+}
+
+// A charge in local money a client's customer pays on the hosted page
+// (`/v1/p2p-checkout/*`), as a purchase delivered to the charge's recipient.
+// The id is a uuid: it is the capability of the keyless routes.
+model P2pCharge {
+  id                 String    @id
+  consumerId         String
+  consumer           Consumer  @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+  tier               String
+  network            String
+  token              String
+  currency           String
+  fiatAmount         String
+  recipientAccountId String
+  recipientAddress   String
+  description        String?
+  // Several payers may pay it (one live order each); otherwise one at a time.
+  multiUse           Boolean   @default(false)
+  // open | paid | cancelled (`expired` is read, never stored).
+  status             String    @default("open")
+  paidCount          Int       @default(0)
+  paidAt             DateTime?
+  expiresAt          DateTime
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  orders P2pOrder[]
+
+  @@index([consumerId, tier, createdAt])
+  @@map("p2p_charge")
+}
+
+// Payouts in local money from a client's balance in the contract: one order
+// per item, each opened by the matcher on the client's balance.
+model P2pPayoutBatch {
+  id            String    @id @default(cuid())
+  consumerId    String
+  consumer      Consumer  @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+  tier          String
+  network       String
+  token         String
+  accountId     String
+  sellerAddress String
+  itemCount     Int
+  // Items no merchant could take when the batch was created: [{ index, currency,
+  // fiatAmount, externalReference, reason }]. Every other item is an order.
+  failedItems   Json?
+  // processing | completed | partially_completed | failed
+  status        String    @default("processing")
+  completedAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  orders P2pOrder[]
+
+  @@index([consumerId, tier, createdAt])
+  @@map("p2p_payout_batch")
+}
+
+// Every transaction the matcher signs, written BEFORE it is broadcast. Only
+// `raw` is ever sent again: a nonce is signed once.
+model P2pMatcherTx {
+  id          String    @id @default(cuid())
+  tier        String
+  network     String
+  fromAddress String
+  nonce       BigInt
+  // open | markPaid | cancel | dispute
+  kind        String
+  orderId     String?
+  toAddress   String
+  hash        String    @unique
+  raw         String
+  // signed | sent | mined | reverted | dropped (its nonce went to another)
+  status      String    @default("signed")
+  sentAt      DateTime?
+  minedBlock  BigInt?
+  lastError   String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([tier, network, fromAddress, nonce])
+  @@index([status, updatedAt])
+  @@index([orderId])
+  @@map("p2p_matcher_tx")
+}
+
+// How far the indexer read each deployment.
+model P2pChainCursor {
+  tier      String
+  network   String
+  contract  String
+  lastBlock BigInt
+  updatedAt DateTime @updatedAt
+
+  @@id([tier, network, contract])
+  @@map("p2p_chain_cursor")
 }

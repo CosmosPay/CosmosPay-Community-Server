@@ -240,10 +240,7 @@ describe('P2PMarket: construction and administration', () => {
     );
     await market.must(STRANGER, 'acceptOwnership');
     expect(await market.read('owner')).toBe(STRANGER);
-    expectRevert(
-      await market.send(OWNER, 'setPaused', [true]),
-      'NotOwner',
-    );
+    expectRevert(await market.send(OWNER, 'setPaused', [true]), 'NotOwner');
   });
 });
 
@@ -381,9 +378,10 @@ describe('P2PMarket: opening orders', () => {
     ]);
 
     await market.must(MERCHANT, 'setMatcher', [MATCHER, 0n, true]);
-    expect(
-      await market.read('matcherTermsOf', [MERCHANT, MATCHER]),
-    ).toEqual({ maxPerOrder: 0n, autoSettle: false });
+    expect(await market.read('matcherTermsOf', [MERCHANT, MATCHER])).toEqual({
+      maxPerOrder: 0n,
+      autoSettle: false,
+    });
     expectRevert(
       await market.send(MATCHER, 'open', [params({ ref: ref('after') })]),
       'NotAuthorized',
@@ -457,8 +455,14 @@ describe('P2PMarket: a buy on a merchant’s liquidity (no bond, seller releases
       integrator: INTEGRATOR,
       integratorFeeBps: 50,
     });
-    expectRevert(await market.send(STRANGER, 'markPaid', [id]), 'NotAuthorized');
-    expectRevert(await market.send(MERCHANT, 'markPaid', [id]), 'NotAuthorized');
+    expectRevert(
+      await market.send(STRANGER, 'markPaid', [id]),
+      'NotAuthorized',
+    );
+    expectRevert(
+      await market.send(MERCHANT, 'markPaid', [id]),
+      'NotAuthorized',
+    );
     // the matcher reports the payment for a buyer without gas
     await market.must(MATCHER, 'markPaid', [id]);
     expect((await order(id)).status).toBe(Status.Paid);
@@ -610,7 +614,10 @@ describe('P2PMarket: a sell with a bond and a settle window', () => {
     await market.must(MERCHANT, 'accept', [second]);
     await market.must(MERCHANT, 'markPaid', [second]);
     await market.must(USER, 'dispute', [second]);
-    expectRevert(await market.send(STRANGER, 'settle', [second]), 'WrongStatus');
+    expectRevert(
+      await market.send(STRANGER, 'settle', [second]),
+      'WrongStatus',
+    );
   });
 
   it('lets the arbiter give the seller the bond of a buyer that lied', async () => {
@@ -665,7 +672,10 @@ describe('P2PMarket: a sell with a bond and a settle window', () => {
         }),
       ]),
     );
-    expectRevert(await market.send(BUYER, 'accept', [id]), 'InsufficientBalance');
+    expectRevert(
+      await market.send(BUYER, 'accept', [id]),
+      'InsufficientBalance',
+    );
   });
 
   it('returns the bond to a buyer that accepted and let the payment window pass', async () => {
@@ -755,7 +765,7 @@ describe('P2PMarket: random sequences never create or lose money', () => {
       const o = await order(id);
       if (!LIVE.has(o.status)) continue;
       total += o.amount;
-      if (o.status !== Status.Offered) total += o.bond;
+      if (o.status !== Number(Status.Offered)) total += o.bond;
     }
     return total;
   }
@@ -790,7 +800,11 @@ describe('P2PMarket: random sequences never create or lose money', () => {
         p.acceptWindow = p.bond > 0n ? 300 : 0;
         p.integratorFeeBps = p.integrator === zeroAddress ? 0 : 75;
         const fn = rand() < 0.3 ? 'openWithDeposit' : 'open';
-        const res = await market.send(fn === 'openWithDeposit' ? seller : from, fn, [p]);
+        const res = await market.send(
+          fn === 'openWithDeposit' ? seller : from,
+          fn,
+          [p],
+        );
         if (res.ok) ids.push(openedId(res));
       } else if (roll < 0.3) {
         await market.send(from, 'accept', [id]);
@@ -808,8 +822,12 @@ describe('P2PMarket: random sequences never create or lose money', () => {
         const o = await order(id);
         await market.send(ARBITER, 'resolve', [
           id,
-          o.amount === 0n ? 0n : (o.amount * BigInt(Math.floor(rand() * 101))) / 100n,
-          o.bond === 0n ? 0n : (o.bond * BigInt(Math.floor(rand() * 101))) / 100n,
+          o.amount === 0n
+            ? 0n
+            : (o.amount * BigInt(Math.floor(rand() * 101))) / 100n,
+          o.bond === 0n
+            ? 0n
+            : (o.bond * BigInt(Math.floor(rand() * 101))) / 100n,
         ]);
       } else if (roll < 0.86) {
         await market.send(from, 'withdraw', [token.address, amount()]);

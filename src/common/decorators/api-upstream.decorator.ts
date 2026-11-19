@@ -14,7 +14,11 @@ export type UpstreamProvider =
   | 'Protected-payments service'
   // The `eldorado` plugin's marketplace, by what it is: the published contract
   // never names the providers Cosmos Pay is built on.
-  | 'P2P marketplace';
+  | 'P2P marketplace'
+  // The EVM networks the P2P market (`src/p2p/`) runs on, through the node the
+  // operator configured per network: reads of the contract and the matcher's
+  // transactions.
+  | 'EVM network';
 
 /**
  * Vendor extension the published spec carries, and `swagger.ts` reads back.

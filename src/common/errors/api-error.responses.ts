@@ -598,6 +598,36 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     path: '/v1/onramp/p2p/webhooks',
   },
 
+  // --- the P2P market --------------------------------------------------------
+  [ApiErrorCode.P2pChallengeInvalid]: {
+    statuses: [400],
+    summary:
+      'The registration challenge is unknown, used, expired or for another wallet',
+    message:
+      'This challenge is unknown, already used or expired, or it was issued for another wallet: ask for a new one.',
+    path: '/v1/p2p/accounts',
+  },
+  [ApiErrorCode.P2pSignatureInvalid]: {
+    statuses: [400],
+    summary: "The signature over the challenge is not the wallet's",
+    message:
+      'The signature does not verify against this wallet for the challenge message.',
+    path: '/v1/p2p/accounts',
+  },
+  [ApiErrorCode.P2pAccountTaken]: {
+    statuses: [409],
+    summary: 'The wallet is already registered on this tier',
+    message: 'This wallet is already registered on testnet.',
+    path: '/v1/p2p/accounts',
+  },
+  [ApiErrorCode.P2pNoMatch]: {
+    statuses: [409],
+    summary: 'No merchant can take this trade right now',
+    message:
+      'No merchant can take this trade right now: try another amount, rail or network, or try again shortly.',
+    path: '/v1/p2p/quotes',
+  },
+
   // --- service --------------------------------------------------------------
   [ApiErrorCode.Misconfigured]: {
     statuses: [503],

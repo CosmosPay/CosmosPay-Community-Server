@@ -79,6 +79,13 @@ export function addressOf(label: string): Hex {
   return getAddress(keccak256(toHex(label)).slice(0, 42));
 }
 
+/** A log as the EVM emitted it, undecoded. */
+export interface RawLog {
+  address: Hex;
+  topics: Hex[];
+  data: Hex;
+}
+
 export interface DecodedLog {
   address: Hex;
   eventName: string;
@@ -198,7 +205,7 @@ export class InProcessEvm {
       abi: contract.abi,
       functionName,
       args,
-    } as Parameters<typeof encodeFunctionData>[0]);
+    });
     const res = await this.evm.runCall({
       caller: createAddressFromString(from),
       to: createAddressFromString(contract.address),
@@ -223,8 +230,37 @@ export class InProcessEvm {
             abi: contract.abi,
             functionName,
             data: returned,
-          } as Parameters<typeof decodeFunctionResult>[0]);
+          });
     return { ok: true, result, logs: this.decodeLogs(res.execResult.logs) };
+  }
+
+  /**
+   * Runs calldata this suite did NOT encode with viem (a codec under test) and
+   * answers what came back raw: the return data and every log's topics and
+   * data, for the codec's own decoder to read.
+   */
+  async callRaw(
+    from: Hex,
+    to: Hex,
+    data: Hex,
+  ): Promise<{ ok: boolean; returned: Hex; logs: RawLog[] }> {
+    const res = await this.evm.runCall({
+      caller: createAddressFromString(from),
+      to: createAddressFromString(to),
+      data: hexToBytes(data),
+      gasLimit: 30_000_000n,
+      skipBalance: true,
+      block: this.nextBlock(),
+    });
+    return {
+      ok: !res.execResult.exceptionError,
+      returned: bytesToHex(res.execResult.returnValue),
+      logs: (res.execResult.logs ?? []).map(([address, topics, logData]) => ({
+        address: getAddress(bytesToHex(address)),
+        topics: topics.map((t) => bytesToHex(t)),
+        data: bytesToHex(logData),
+      })),
+    };
   }
 
   private decodeError(

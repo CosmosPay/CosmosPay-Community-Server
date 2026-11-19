@@ -116,4 +116,12 @@ export enum AdvisoryLockKey {
   // 881_022 is the deposit slots' two-key class (`PAYMENT_DEPOSIT_LOCK_CLASS`).
   PaymentReceiptSweeper = 881_023,
   SandboxDepositObserver = 881_024,
+  // 881_025 is the receipts' two-key class (`PAYMENT_RECEIPT_LOCK_CLASS`);
+  // 881_026 to 881_029 are left to branches in flight.
+  // The P2P market (`src/p2p/`). 881_033 to 881_035 are its two-key classes
+  // (`P2P_MATCHER_NONCE_LOCK_CLASS`, `P2P_CHARGE_LOCK_CLASS`,
+  // `P2P_MERCHANT_LOCK_CLASS` in `p2p.constants.ts`).
+  P2pIndexer = 881_030,
+  P2pExpiry = 881_031,
+  P2pMatcherFollower = 881_032,
 }

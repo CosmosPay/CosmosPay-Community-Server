@@ -35,6 +35,7 @@ import { RecoveryModule } from '@/recovery/recovery.module';
 import { CommonModule } from '@/common/common.module';
 import { PluginsModule } from '@/plugins/plugins.module';
 import { NativePluginsModule } from '@/native-plugins/native-plugins.module';
+import { P2pModule } from '@/p2p/p2p.module';
 
 @Module({
   imports: [
@@ -97,6 +98,10 @@ import { NativePluginsModule } from '@/native-plugins/native-plugins.module';
     // service cannot open (/v1/wallet/easy-recovery). Last, so the spec's
     // existing paths keep their order.
     EasyRecoveryModule,
+    // The P2P market on Cosmos Pay's own contract, on the EVM networks it is
+    // deployed on (/v1/p2p, /v1/p2p-checkout). Off on a tier until
+    // P2P_MARKET_CONTRACTS_* names a deployment. Last, for the same reason.
+    P2pModule,
   ],
   providers: [
     // Persist a RequestLog row per request (powers the API logs view).

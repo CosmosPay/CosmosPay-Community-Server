@@ -333,5 +333,7 @@ export function assertIdentityConfigConsistent(env: Env): void {
     'APISIX_ADMIN_KEY',
     'WALLET_BACKUP_ENCRYPTION_KEY',
     'RECOVERY_JWT_SECRET',
+    // Seals P2P payment details and identities: a boundary of its own.
+    'P2P_DATA_ENCRYPTION_KEY',
   ]);
 }

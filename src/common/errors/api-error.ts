@@ -298,6 +298,22 @@ export enum ApiErrorCode {
    */
   WebhookSignatureInvalid = 'webhook_signature_invalid',
 
+  // --- the P2P market (`src/p2p/`) ------------------------------------------
+  /**
+   * A wallet registration names a challenge that is unknown, already used,
+   * expired, or issued for another address or consumer: ask for a new one.
+   */
+  P2pChallengeInvalid = 'p2p_challenge_invalid',
+  /** The EIP-191 signature over the challenge does not recover the address. */
+  P2pSignatureInvalid = 'p2p_signature_invalid',
+  /** The wallet is already registered, by this consumer or another, on this tier. */
+  P2pAccountTaken = 'p2p_account_taken',
+  /**
+   * No merchant can take the trade right now (price, limits, liquidity, rail),
+   * or the quote's merchant no longer can: quote again.
+   */
+  P2pNoMatch = 'p2p_no_match',
+
   // --- service --------------------------------------------------------------
   Misconfigured = 'misconfigured',
   Internal = 'internal_error',

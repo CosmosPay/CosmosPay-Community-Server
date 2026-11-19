@@ -23,6 +23,7 @@ const URL_OPTIONS = {
   require_tld: false,
 };
 
+import { assertP2pConfigConsistent } from '@/config/p2p-env';
 import {
   DEFAULT_SWAP_FEE_BPS,
   DEFAULT_SWAP_MAX_SLIPPAGE_BPS,
@@ -225,6 +226,51 @@ class EnvironmentVariables {
   @IsInt()
   @Min(1)
   SANDBOX_RPC_TIMEOUT_MS?: number;
+
+  // --- P2P market (src/p2p/): JSON sets checked in full by `p2p-env.ts` ---
+  @IsOptional()
+  @IsString()
+  P2P_MARKET_CONTRACTS_MAINNET?: string;
+
+  @IsOptional()
+  @IsString()
+  P2P_MARKET_CONTRACTS_TESTNET?: string;
+
+  @IsOptional()
+  @IsString()
+  P2P_MARKET_DEPLOY_BLOCKS_MAINNET?: string;
+
+  @IsOptional()
+  @IsString()
+  P2P_MARKET_DEPLOY_BLOCKS_TESTNET?: string;
+
+  @IsOptional()
+  @IsString()
+  P2P_RPC_URLS_MAINNET?: string;
+
+  @IsOptional()
+  @IsString()
+  P2P_RPC_URLS_TESTNET?: string;
+
+  /** The matcher's key; its shape and its distinctness are checked by `p2p-env.ts`. */
+  @IsOptional()
+  @IsString()
+  P2P_MATCHER_PRIVATE_KEY?: string;
+
+  @IsOptional()
+  @IsString()
+  P2P_DATA_ENCRYPTION_KEY?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(1000)
+  P2P_MERCHANT_MAX_OPEN_ORDERS?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1000)
+  P2P_INDEXER_INTERVAL_MS?: number;
 
   /** `{"0xToken…": "0.05"}` — checked in full by `parseEvmTokenFees`. */
   @IsOptional()
@@ -820,6 +866,10 @@ export function validateEnv(config: Record<string, unknown>) {
 
   // Private payments (ZK payments) are optional per network, but all-or-nothing within one.
   assertZkPaymentsConfigConsistent(config);
+
+  // The P2P market: optional per tier, all-or-nothing within one, and a matcher
+  // key that is no other key of this service.
+  assertP2pConfigConsistent(config);
 
   // Parsed here as well, so a malformed value fails the boot naming its
   // variable instead of surfacing from the configuration factory.
