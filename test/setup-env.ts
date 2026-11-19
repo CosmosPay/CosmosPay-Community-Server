@@ -129,3 +129,18 @@ for (const suffix of [
 ]) {
   process.env[`ZK_PAYMENTS_MAINNET_${suffix}`] = '';
 }
+// The P2P market: a fixture deployment on Base Sepolia (testnet) and none on
+// mainnet, so the suites see the same tiers everywhere. Nothing here is ever
+// reached on-chain: the jobs are off (OBSERVER_ENABLED above) and the P2P suite
+// replaces the chain reader. Throwaway keys, distinct from every other key.
+// Pinned, mainnet empty rather than deleted, for the same dotenv reason.
+process.env.P2P_MARKET_CONTRACTS_TESTNET = JSON.stringify({
+  base: '0x5FbDB2315678afecb367f032d93F642f64180aa3',
+});
+process.env.P2P_MARKET_DEPLOY_BLOCKS_TESTNET = JSON.stringify({ base: 1 });
+process.env.P2P_RPC_URLS_TESTNET = '';
+process.env.P2P_MARKET_CONTRACTS_MAINNET = '';
+process.env.P2P_MARKET_DEPLOY_BLOCKS_MAINNET = '';
+process.env.P2P_RPC_URLS_MAINNET = '';
+process.env.P2P_MATCHER_PRIVATE_KEY = `0x${'6a'.repeat(32)}`;
+process.env.P2P_DATA_ENCRYPTION_KEY = Buffer.alloc(32, 11).toString('base64');

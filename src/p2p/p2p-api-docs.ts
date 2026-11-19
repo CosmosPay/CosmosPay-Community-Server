@@ -18,16 +18,6 @@ export const P2P_NETWORK_UNSUPPORTED_EXAMPLE = {
   },
 };
 
-/** One sentence per extra code, from its own table entry. */
-function extraText(codes: readonly ApiErrorCode[]): string {
-  return codes
-    .map(
-      (code) =>
-        ` \`${code}\`: ${API_ERROR_CASES[code].summary.replace(/\.?$/, '.')}`,
-    )
-    .join('');
-}
-
 /** The examples the P2P services really send, for the codes they share. */
 const P2P_EXAMPLES = {
   ...P2P_NETWORK_UNSUPPORTED_EXAMPLE,
@@ -67,6 +57,19 @@ const P2P_EXAMPLES = {
   },
 };
 
+/** One sentence per extra code: the P2P example's summary, else the table's. */
+function extraText(codes: readonly ApiErrorCode[]): string {
+  const summaries = P2P_EXAMPLES as Partial<
+    Record<ApiErrorCode, { summary: string }>
+  >;
+  return codes
+    .map((code) => {
+      const summary = summaries[code]?.summary ?? API_ERROR_CASES[code].summary;
+      return ` \`${code}\`: ${summary.replace(/\.?$/, '.')}`;
+    })
+    .join('');
+}
+
 /**
  * `400 network_unsupported` (the tier has no deployment, or not on that
  * network), with the route's other 400s.
@@ -90,6 +93,24 @@ export const P2pNoMatchResponse = (...extra: ApiErrorCode[]) =>
       '`p2p_no_match`: no merchant can take the trade right now (price, limits, liquidity, rail, or the market is paused for new orders), or the quote’s merchant no longer can. Quote again, or try another amount, rail or network.' +
       extraText(extra),
     examples: P2P_EXAMPLES,
+  });
+
+/**
+ * `404 not_found` on a route with no id in its path: a body names one of the
+ * caller's rows (an account, an order) and it is not the caller's on this tier.
+ */
+export const P2pBodyRowNotFound = (what: string, path: string) =>
+  ApiErrorResponse({
+    status: 404,
+    codes: [ApiErrorCode.NotFound],
+    description: `The ${what} the body names is not one of yours on the key’s tier. Another consumer’s, or another tier’s, is the same answer.`,
+    examples: {
+      [ApiErrorCode.NotFound]: {
+        summary: `No such ${what} of yours`,
+        message: 'P2P account cm3p2pacc0001l70g8v5q3z2w not found',
+        path,
+      },
+    },
   });
 
 export const P2pOrderIdParam = () =>

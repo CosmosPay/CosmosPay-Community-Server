@@ -22,6 +22,8 @@ Conventions for this repo. They are enforced by `npm run lint`, which CI gates o
 | `npm run zk:e2e-testnet` | the real-chain check of private payments on testnet: registers, proves, transfers and confirms through the module's own services. Slow (UltraHonk proofs in Node), needs the deployed set in `.env` |
 | `npm run sandbox:keys -- --out <file>` | creates the sandbox's HD seed, treasury key and cUSD deployer key in a file OUTSIDE every repo (a path inside this one is refused) and prints only the addresses |
 | `npm run sandbox:status` / `sandbox:deploy-cusd` | `-- --secrets-file <file>`: the sandbox treasury's address and balances on each test network it settles on (reads only; one EVM address, one derived key per other network); `-- --network <id>` deploys cUSD where no official test USDC exists and prints its `SANDBOX_CUSD_ADDRESSES` entry. Test networks only: every client checks the node's chain identity first (`eth_chainId`, the XRP Ledger's `network_id`, NEAR's `chain_id`, Sui's chain identifier, Aptos' `chain_id`) |
+| `npm run p2p:deploy` | `-- --network <id> --tier testnet\|mainnet --secrets-file <file outside the repo> --treasury 0x.. --arbiter 0x.. --fee-bps <n> [--owner 0x..] [--rpc <url>]`: checks `eth_chainId`, deploys `P2P_MARKET_ARTIFACT`, allows the listed tokens (mainnet: `--i-understand-mainnet` and `--owner`, prints the owner's `setToken` calls instead) and prints the env entries. With `--contract` or `--env-file` naming a deployment it only verifies (code, owner, tokens) |
+| `npm run p2p:verify-tokens` | `-- --tier testnet\|mainnet [--rpc-urls <JSON>]`: checks the P2P token table's `symbol`/`decimals` on-chain, after each node's `eth_chainId` |
 | `npm run sandbox:prepare` | `-- --secrets-file <file> [--network <id>]`: the treasury's one-time setup where a network needs one before anyone can pay (the test USDC trustline on the XRP Ledger, the token registration on NEAR). Needs the network's gas coin first; run again it only reports |
 
 ## Imports: always use the path aliases, never relative paths
@@ -843,6 +845,51 @@ refreshes it (ledger first, then LayerZero Scan), throttled per row by `lastChec
   file); the service checks the deployed wasm and the OFT and token it is bound to
   before handing a holder the transaction. `cargo test` in the crate runs its tests;
   rebuilding it is a new wasm, a new hash and a new deployment.
+
+## The P2P market (`src/p2p/`): Cosmos Pay's own contract, and the one key on the server
+
+`contracts/P2PMarket.sol` (artifact `src/evm/p2p-market.artifact.ts`, its own
+spec in `src/evm/p2p-market.spec.ts`) holds every token of the market: free
+balances and orders between a seller and a buyer, released by the seller (or a
+bot it granted `PERM_RELEASE`), refunded by deadlines, split only by the
+arbiter. Never the word "escrow" where a person reads: "locked", "order".
+
+- **The matcher is the only server key** (`P2P_MATCHER_PRIVATE_KEY`): gas and
+  the authority sellers gave it with `setMatcher`. It is never the relayer's nor
+  the sandbox treasury's (the boot refuses it), and it signs ONLY in
+  `P2pMatcherService`: simulate (`eth_estimateGas`, a revert signs nothing),
+  sign and write `p2p_matcher_tx` under the network's nonce lock, then
+  broadcast. Only stored bytes are sent again (`P2pMatcherFollowerService`); a
+  nonce the chain passed without its row is `dropped`, never re-signed. The
+  owner and the arbiter are external wallets; the console only BUILDS the
+  arbiter's `resolve`.
+- **Statuses follow the chain.** Only the indexer moves an order past
+  `pending` (and only `P2pOrderOpener` / the follower / the expiry job write
+  `failed`), every write a compare-and-swap from `P2P_EVENT_TRANSITIONS`. An
+  `OrderOpened` is ours only with our `ref`, from the opener the order expects
+  and every field equal; a sale's windows and integrator are read back with
+  `getOrder`. Keep all three checks: a copy of our ref under another opener is
+  someone else's order.
+- **The ABI codec is hand-written** (`p2p-market-abi.ts`, `@noble/hashes`):
+  selectors and topics are computed from signatures, and its spec checks it
+  against viem AND the contract in the in-process EVM. viem stays a
+  devDependency.
+- **Tenancy.** Every keyed route starts at `P2pNetworksService.tierFor` (a tier
+  with no deployment is `network_unsupported`), every lookup filters by consumer
+  AND tier, a merchant's reads by `merchantConsumerId`. Personal data (payment
+  methods, payer identity, beneficiary) is sealed with `P2P_DATA_ENCRYPTION_KEY`
+  bound to row and field, shown only to the owner and the counterparty of a
+  LIVE order, and never put in a webhook: each role's webhook body is an
+  explicit allowlist (`P2P_CLIENT_WEBHOOK_KEYS`, `P2P_MERCHANT_WEBHOOK_KEYS`).
+- **Keyless routes** live under `/v1/p2p-checkout` only. A charge id reads the
+  charge and starts an order within its budgets (one live order per charge
+  unless multi-use, one per client /48, a creation budget per charge, checked
+  under the charge's advisory lock); an order's routes take its payer token
+  (only its SHA-256 stored).
+- **Deployments are verified before they are served**: the code at the
+  configured address must equal the creation `eth_call` runtime of the
+  artifact, and only tokens the contract allows are listed. A changed contract
+  is a new artifact and a new deployment.
 
 ## Dashboard analytics read other modules' tables, in Postgres
 

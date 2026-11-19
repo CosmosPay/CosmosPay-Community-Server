@@ -34,6 +34,7 @@ import {
   P2pMarketPayoutBatchListEntity,
 } from '@/p2p/entities/p2p-charge.entity';
 import {
+  P2pBodyRowNotFound,
   P2pChargeIdParam,
   P2pNetworkRefusal,
   P2pNoMatchResponse,
@@ -61,6 +62,7 @@ export class P2pChargesController {
   @ApiCreatedResponse({ type: P2pMarketChargeEntity })
   @ApiUpstream('EVM network')
   @P2pNetworkRefusal(ApiErrorCode.AssetUnsupported)
+  @P2pBodyRowNotFound('recipient account', '/v1/p2p/charges')
   create(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Body() dto: CreateP2pMarketChargeDto,
@@ -141,6 +143,7 @@ export class P2pChargesController {
     ApiErrorCode.InvalidStateTransition,
   )
   @P2pNoMatchResponse()
+  @P2pBodyRowNotFound('account', '/v1/p2p/payouts')
   createPayout(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Body() dto: CreateP2pMarketPayoutDto,

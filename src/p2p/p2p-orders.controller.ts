@@ -38,6 +38,7 @@ import {
   P2pMarketTransferMatchListEntity,
 } from '@/p2p/entities/p2p-order.entity';
 import {
+  P2pBodyRowNotFound,
   P2pNetworkRefusal,
   P2pNoMatchResponse,
   P2pOrderIdParam,
@@ -77,6 +78,7 @@ export class P2pOrdersController {
   @ApiUpstream('EVM network')
   @P2pNetworkRefusal(ApiErrorCode.AssetUnsupported)
   @P2pNoMatchResponse()
+  @P2pBodyRowNotFound('integrator account', '/v1/p2p/quotes')
   quote(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Body() dto: CreateP2pMarketQuoteDto,
@@ -90,7 +92,7 @@ export class P2pOrdersController {
   @ApiOperation({
     summary: 'Create an order from a quote',
     description:
-      'A purchase (BUY) is opened by the matcher on the merchant’s balance, delivering to `recipient`; the answer carries the merchant’s payment details and `paymentDeadline` once the chain shows it open (`P2P_ORDER_CREATED`). A sale (SELL) answers `transactions`: the exact approval and `openWithDeposit`, for the `seller` wallet to sign; the merchant accepts it with a bond and pays `beneficiary`. One order per quote: the same quote and wallet again answer the same order.',
+      'A purchase (BUY) is opened by the matcher on the merchant’s balance, delivering to `recipient`; the answer carries the merchant’s payment details at once, and `paymentDeadline` once the chain shows the order open (`P2P_ORDER_CREATED`). A sale (SELL) answers `transactions`: the exact approval and `openWithDeposit`, for the `seller` wallet to sign; the merchant accepts it with a bond and pays `beneficiary`. One order per quote: the same quote and wallet again answer the same order.',
   })
   @ApiCreatedResponse({ type: P2pMarketCreatedOrderEntity })
   @ApiUpstream('EVM network')

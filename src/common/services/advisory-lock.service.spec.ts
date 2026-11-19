@@ -120,11 +120,16 @@ describe('AdvisoryLockService', () => {
     expect(ids).toEqual([
       881_001, 881_002, 881_003, 881_004, 881_006, 881_008, 881_009, 881_010,
       881_011, 881_012, 881_013, 881_014, 881_015, 881_016, 881_017, 881_018,
-      881_021, 881_023, 881_024,
+      881_021, 881_023, 881_024, 881_030, 881_031, 881_032,
     ]);
     // Retired with Pollar: a replica still on the old build takes these, so a new
     // task must never be given one.
     expect(ids).not.toContain(881_005);
     expect(ids).not.toContain(881_007);
+    // The two-key classes (deposit slots, receipts, the P2P market's) share
+    // the numbering: no task lock may take one.
+    for (const lockClass of [881_022, 881_025, 881_033, 881_034, 881_035]) {
+      expect(ids).not.toContain(lockClass);
+    }
   });
 });

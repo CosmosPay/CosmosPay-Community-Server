@@ -30,7 +30,11 @@ import {
   P2pMarketOfferEntity,
   P2pMarketOfferListEntity,
 } from '@/p2p/entities/p2p-offer.entity';
-import { P2pNetworkRefusal, P2pRowIdParam } from '@/p2p/p2p-api-docs';
+import {
+  P2pBodyRowNotFound,
+  P2pNetworkRefusal,
+  P2pRowIdParam,
+} from '@/p2p/p2p-api-docs';
 import { P2pOffersService } from '@/p2p/p2p-offers.service';
 
 const OFFER_ID = P2pRowIdParam('offer', 'cm3p2poff0001l70g8v5q3z2w');
@@ -50,6 +54,7 @@ export class P2pOffersController {
   })
   @ApiCreatedResponse({ type: P2pMarketOfferEntity })
   @P2pNetworkRefusal(ApiErrorCode.AssetUnsupported)
+  @P2pBodyRowNotFound('account', '/v1/p2p/offers')
   create(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Body() dto: CreateP2pMarketOfferDto,

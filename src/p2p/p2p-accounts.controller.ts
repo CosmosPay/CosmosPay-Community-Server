@@ -43,7 +43,11 @@ import {
   P2pMarketPaymentMethodEntity,
   P2pMarketPaymentMethodListEntity,
 } from '@/p2p/entities/p2p-account.entity';
-import { P2pNetworkRefusal, P2pRowIdParam } from '@/p2p/p2p-api-docs';
+import {
+  P2pBodyRowNotFound,
+  P2pNetworkRefusal,
+  P2pRowIdParam,
+} from '@/p2p/p2p-api-docs';
 import { P2pAccountsService } from '@/p2p/p2p-accounts.service';
 import { P2pPaymentMethodsService } from '@/p2p/p2p-payment-methods.service';
 import { P2P_ACCOUNT_READ_RATE_LIMIT } from '@/p2p/p2p.constants';
@@ -186,6 +190,7 @@ export class P2pAccountsController {
   })
   @ApiCreatedResponse({ type: P2pMarketPaymentMethodEntity })
   @P2pNetworkRefusal()
+  @P2pBodyRowNotFound('account', '/v1/p2p/payment-methods')
   createPaymentMethod(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Body() dto: CreateP2pMarketPaymentMethodDto,

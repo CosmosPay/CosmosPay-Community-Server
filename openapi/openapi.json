@@ -20345,6 +20345,29 @@
           "403": {
             "$ref": "#/components/responses/Forbidden"
           },
+          "404": {
+            "description": "The account or order the body names is not one of yours on the key’s tier. Another consumer’s, or another tier’s, is the same answer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                },
+                "examples": {
+                  "not_found": {
+                    "summary": "not_found: No such account or order of yours",
+                    "value": {
+                      "statusCode": 404,
+                      "code": "not_found",
+                      "error": "Not Found",
+                      "message": "P2P account cm3p2pacc0001l70g8v5q3z2w not found",
+                      "path": "/v1/p2p/transactions",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
           "500": {
             "$ref": "#/components/responses/InternalError"
           },
@@ -20785,7 +20808,7 @@
             }
           },
           "400": {
-            "description": "`network_unsupported`: the P2P market does not run on the key’s tier yet, or not on that network (the message lists the networks it runs on). `invalid_state_transition`: The resource cannot move to that state from the one it is in.",
+            "description": "`network_unsupported`: the P2P market does not run on the key’s tier yet, or not on that network (the message lists the networks it runs on). `invalid_state_transition`: The order is not where this action needs it.",
             "content": {
               "application/json": {
                 "schema": {
@@ -20980,6 +21003,29 @@
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "The account the body names is not one of yours on the key’s tier. Another consumer’s, or another tier’s, is the same answer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                },
+                "examples": {
+                  "not_found": {
+                    "summary": "not_found: No such account of yours",
+                    "value": {
+                      "statusCode": 404,
+                      "code": "not_found",
+                      "error": "Not Found",
+                      "message": "P2P account cm3p2pacc0001l70g8v5q3z2w not found",
+                      "path": "/v1/p2p/payment-methods",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
           },
           "500": {
             "$ref": "#/components/responses/InternalError"
@@ -21256,7 +21302,7 @@
             }
           },
           "400": {
-            "description": "`network_unsupported`: the P2P market does not run on the key’s tier yet, or not on that network (the message lists the networks it runs on). `asset_unsupported`: The cross-chain route cannot swap this asset on the named chain.",
+            "description": "`network_unsupported`: the P2P market does not run on the key’s tier yet, or not on that network (the message lists the networks it runs on). `asset_unsupported`: The token is not traded on that network.",
             "content": {
               "application/json": {
                 "schema": {
@@ -21294,6 +21340,29 @@
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "The account the body names is not one of yours on the key’s tier. Another consumer’s, or another tier’s, is the same answer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                },
+                "examples": {
+                  "not_found": {
+                    "summary": "not_found: No such account of yours",
+                    "value": {
+                      "statusCode": 404,
+                      "code": "not_found",
+                      "error": "Not Found",
+                      "message": "P2P account cm3p2pacc0001l70g8v5q3z2w not found",
+                      "path": "/v1/p2p/offers",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
           },
           "500": {
             "$ref": "#/components/responses/InternalError"
@@ -21593,7 +21662,7 @@
             }
           },
           "400": {
-            "description": "`network_unsupported`: the P2P market does not run on the key’s tier yet, or not on that network (the message lists the networks it runs on). `asset_unsupported`: The cross-chain route cannot swap this asset on the named chain.",
+            "description": "`network_unsupported`: the P2P market does not run on the key’s tier yet, or not on that network (the message lists the networks it runs on). `asset_unsupported`: The token is not traded on that network.",
             "content": {
               "application/json": {
                 "schema": {
@@ -21631,6 +21700,29 @@
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "The integrator account the body names is not one of yours on the key’s tier. Another consumer’s, or another tier’s, is the same answer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                },
+                "examples": {
+                  "not_found": {
+                    "summary": "not_found: No such integrator account of yours",
+                    "value": {
+                      "statusCode": 404,
+                      "code": "not_found",
+                      "error": "Not Found",
+                      "message": "P2P account cm3p2pacc0001l70g8v5q3z2w not found",
+                      "path": "/v1/p2p/quotes",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
           },
           "409": {
             "description": "`p2p_no_match`: no merchant can take the trade right now (price, limits, liquidity, rail, or the market is paused for new orders), or the quote’s merchant no longer can. Quote again, or try another amount, rail or network.",
@@ -21693,7 +21785,7 @@
     },
     "/v1/p2p/orders": {
       "post": {
-        "description": "A purchase (BUY) is opened by the matcher on the merchant’s balance, delivering to `recipient`; the answer carries the merchant’s payment details and `paymentDeadline` once the chain shows it open (`P2P_ORDER_CREATED`). A sale (SELL) answers `transactions`: the exact approval and `openWithDeposit`, for the `seller` wallet to sign; the merchant accepts it with a bond and pays `beneficiary`. One order per quote: the same quote and wallet again answer the same order.\n\nRequires the `p2p:write` scope.",
+        "description": "A purchase (BUY) is opened by the matcher on the merchant’s balance, delivering to `recipient`; the answer carries the merchant’s payment details at once, and `paymentDeadline` once the chain shows the order open (`P2P_ORDER_CREATED`). A sale (SELL) answers `transactions`: the exact approval and `openWithDeposit`, for the `seller` wallet to sign; the merchant accepts it with a bond and pays `beneficiary`. One order per quote: the same quote and wallet again answer the same order.\n\nRequires the `p2p:write` scope.",
         "operationId": "P2pOrdersController_create_v1",
         "parameters": [],
         "requestBody": {
@@ -21741,7 +21833,7 @@
             }
           },
           "400": {
-            "description": "`network_unsupported`: the P2P market does not run on the key’s tier yet, or not on that network (the message lists the networks it runs on). `quote_expired`: The quote is ours and yours, but past its expiry.",
+            "description": "`network_unsupported`: the P2P market does not run on the key’s tier yet, or not on that network (the message lists the networks it runs on). `quote_expired`: The quote expired.",
             "content": {
               "application/json": {
                 "schema": {
@@ -21804,7 +21896,7 @@
             }
           },
           "409": {
-            "description": "`p2p_no_match`: no merchant can take the trade right now (price, limits, liquidity, rail, or the market is paused for new orders), or the quote’s merchant no longer can. Quote again, or try another amount, rail or network. `idempotency_conflict`: This Idempotency-Key was already used for a different request.",
+            "description": "`p2p_no_match`: no merchant can take the trade right now (price, limits, liquidity, rail, or the market is paused for new orders), or the quote’s merchant no longer can. Quote again, or try another amount, rail or network. `idempotency_conflict`: This quote already made an order with another wallet.",
             "content": {
               "application/json": {
                 "schema": {
@@ -22120,7 +22212,7 @@
             }
           },
           "400": {
-            "description": "`network_unsupported`: the P2P market does not run on the key’s tier yet, or not on that network (the message lists the networks it runs on). `invalid_state_transition`: The resource cannot move to that state from the one it is in.",
+            "description": "`network_unsupported`: the P2P market does not run on the key’s tier yet, or not on that network (the message lists the networks it runs on). `invalid_state_transition`: The order is not where this action needs it.",
             "content": {
               "application/json": {
                 "schema": {
@@ -22249,7 +22341,7 @@
             }
           },
           "400": {
-            "description": "`network_unsupported`: the P2P market does not run on the key’s tier yet, or not on that network (the message lists the networks it runs on). `invalid_state_transition`: The resource cannot move to that state from the one it is in.",
+            "description": "`network_unsupported`: the P2P market does not run on the key’s tier yet, or not on that network (the message lists the networks it runs on). `invalid_state_transition`: The order is not where this action needs it.",
             "content": {
               "application/json": {
                 "schema": {
@@ -22378,7 +22470,7 @@
             }
           },
           "400": {
-            "description": "`network_unsupported`: the P2P market does not run on the key’s tier yet, or not on that network (the message lists the networks it runs on). `invalid_state_transition`: The resource cannot move to that state from the one it is in.",
+            "description": "`network_unsupported`: the P2P market does not run on the key’s tier yet, or not on that network (the message lists the networks it runs on). `invalid_state_transition`: The order is not where this action needs it.",
             "content": {
               "application/json": {
                 "schema": {
@@ -22739,7 +22831,7 @@
             }
           },
           "400": {
-            "description": "`network_unsupported`: the P2P market does not run on the key’s tier yet, or not on that network (the message lists the networks it runs on). `asset_unsupported`: The cross-chain route cannot swap this asset on the named chain.",
+            "description": "`network_unsupported`: the P2P market does not run on the key’s tier yet, or not on that network (the message lists the networks it runs on). `asset_unsupported`: The token is not traded on that network.",
             "content": {
               "application/json": {
                 "schema": {
@@ -22777,6 +22869,29 @@
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "The recipient account the body names is not one of yours on the key’s tier. Another consumer’s, or another tier’s, is the same answer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                },
+                "examples": {
+                  "not_found": {
+                    "summary": "not_found: No such recipient account of yours",
+                    "value": {
+                      "statusCode": 404,
+                      "code": "not_found",
+                      "error": "Not Found",
+                      "message": "P2P account cm3p2pacc0001l70g8v5q3z2w not found",
+                      "path": "/v1/p2p/charges",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
           },
           "500": {
             "$ref": "#/components/responses/InternalError"
@@ -23098,7 +23213,7 @@
             }
           },
           "400": {
-            "description": "`network_unsupported`: the P2P market does not run on the key’s tier yet, or not on that network (the message lists the networks it runs on). `asset_unsupported`: The cross-chain route cannot swap this asset on the named chain. `invalid_state_transition`: The resource cannot move to that state from the one it is in.",
+            "description": "`network_unsupported`: the P2P market does not run on the key’s tier yet, or not on that network (the message lists the networks it runs on). `asset_unsupported`: The token is not traded on that network. `invalid_state_transition`: The order is not where this action needs it.",
             "content": {
               "application/json": {
                 "schema": {
@@ -23147,6 +23262,29 @@
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "The account the body names is not one of yours on the key’s tier. Another consumer’s, or another tier’s, is the same answer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                },
+                "examples": {
+                  "not_found": {
+                    "summary": "not_found: No such account of yours",
+                    "value": {
+                      "statusCode": 404,
+                      "code": "not_found",
+                      "error": "Not Found",
+                      "message": "P2P account cm3p2pacc0001l70g8v5q3z2w not found",
+                      "path": "/v1/p2p/payouts",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
           },
           "409": {
             "description": "`p2p_no_match`: no merchant can take the trade right now (price, limits, liquidity, rail, or the market is paused for new orders), or the quote’s merchant no longer can. Quote again, or try another amount, rail or network.",
@@ -23538,7 +23676,7 @@
             "$ref": "#/components/responses/NotFound"
           },
           "409": {
-            "description": "`p2p_no_match`: no merchant can take the trade right now (price, limits, liquidity, rail, or the market is paused for new orders), or the quote’s merchant no longer can. Quote again, or try another amount, rail or network. `operation_in_flight`: A conflicting operation is still settling. `request_closed`: The payment request was paid, cancelled or expired.",
+            "description": "`p2p_no_match`: no merchant can take the trade right now (price, limits, liquidity, rail, or the market is paused for new orders), or the quote’s merchant no longer can. Quote again, or try another amount, rail or network. `operation_in_flight`: Someone is paying this charge right now. `request_closed`: The charge can no longer be paid.",
             "content": {
               "application/json": {
                 "schema": {
@@ -23837,7 +23975,7 @@
             }
           },
           "400": {
-            "description": "`network_unsupported`: the P2P market does not run on the key’s tier yet, or not on that network (the message lists the networks it runs on). `invalid_state_transition`: The resource cannot move to that state from the one it is in.",
+            "description": "`network_unsupported`: the P2P market does not run on the key’s tier yet, or not on that network (the message lists the networks it runs on). `invalid_state_transition`: The order is not where this action needs it.",
             "content": {
               "application/json": {
                 "schema": {
@@ -23974,7 +24112,7 @@
             }
           },
           "400": {
-            "description": "`network_unsupported`: the P2P market does not run on the key’s tier yet, or not on that network (the message lists the networks it runs on). `invalid_state_transition`: The resource cannot move to that state from the one it is in.",
+            "description": "`network_unsupported`: the P2P market does not run on the key’s tier yet, or not on that network (the message lists the networks it runs on). `invalid_state_transition`: The order is not where this action needs it.",
             "content": {
               "application/json": {
                 "schema": {
@@ -42288,7 +42426,7 @@
           },
           "contract": {
             "type": "string",
-            "example": "0x5fbDB2315678afecb367f032d93F642f64180aa3",
+            "example": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
             "description": "The P2P market contract: where balances are deposited and orders lock tokens. Verified against this service's build before it is listed."
           },
           "protocolFeeBps": {
@@ -42539,7 +42677,7 @@
           },
           "to": {
             "type": "string",
-            "example": "0x5fbDB2315678afecb367f032d93F642f64180aa3",
+            "example": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
             "description": "The contract to call: the P2P market, or the token for an approval."
           },
           "data": {
@@ -44052,7 +44190,7 @@
           },
           "contract": {
             "type": "string",
-            "example": "0x5fbDB2315678afecb367f032d93F642f64180aa3"
+            "example": "0x5FbDB2315678afecb367f032d93F642f64180aa3"
           },
           "token": {
             "type": "string",
@@ -44308,7 +44446,7 @@
           },
           "contract": {
             "type": "string",
-            "example": "0x5fbDB2315678afecb367f032d93F642f64180aa3"
+            "example": "0x5FbDB2315678afecb367f032d93F642f64180aa3"
           },
           "token": {
             "type": "string",
@@ -44648,7 +44786,7 @@
           },
           "contract": {
             "type": "string",
-            "example": "0x5fbDB2315678afecb367f032d93F642f64180aa3"
+            "example": "0x5FbDB2315678afecb367f032d93F642f64180aa3"
           },
           "merchantAccountId": {
             "type": "string",

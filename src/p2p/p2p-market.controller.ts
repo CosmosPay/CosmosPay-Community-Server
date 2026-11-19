@@ -16,7 +16,10 @@ import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface'
 import { BuildP2pMarketTransactionDto } from '@/p2p/dto/p2p-transaction.dto';
 import { P2pMarketOverviewEntity } from '@/p2p/entities/p2p-market.entity';
 import { P2pMarketTransactionEntity } from '@/p2p/entities/p2p-transaction.entity';
-import { P2P_NETWORK_UNSUPPORTED_EXAMPLE } from '@/p2p/p2p-api-docs';
+import {
+  P2P_NETWORK_UNSUPPORTED_EXAMPLE,
+  P2pBodyRowNotFound,
+} from '@/p2p/p2p-api-docs';
 import { P2pMarketService } from '@/p2p/p2p-market.service';
 import { P2pTransactionsService } from '@/p2p/p2p-transactions.service';
 
@@ -57,6 +60,7 @@ export class P2pMarketController {
   })
   @ApiOkResponse({ type: P2pMarketTransactionEntity })
   @ApiUpstream('EVM network')
+  @P2pBodyRowNotFound('account or order', '/v1/p2p/transactions')
   @ApiErrorResponse({
     status: 400,
     codes: [
