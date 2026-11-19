@@ -124,7 +124,7 @@ export class P2pMarketOrderEntity {
   @ApiProperty({ example: 84532 })
   chainId!: number;
 
-  @ApiProperty({ example: '0x5fbDB2315678afecb367f032d93F642f64180aa3' })
+  @ApiProperty({ example: '0x5FbDB2315678afecb367f032d93F642f64180aa3' })
   contract!: string;
 
   @ApiProperty({ example: '0x036CbD53842c5426634e7929541eC2318f3dCF7e' })
@@ -340,7 +340,7 @@ export class P2pMarketMerchantOrderEntity {
   @ApiProperty({ example: 84532 })
   chainId!: number;
 
-  @ApiProperty({ example: '0x5fbDB2315678afecb367f032d93F642f64180aa3' })
+  @ApiProperty({ example: '0x5FbDB2315678afecb367f032d93F642f64180aa3' })
   contract!: string;
 
   @ApiProperty({

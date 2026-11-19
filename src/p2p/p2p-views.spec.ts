@@ -11,7 +11,7 @@ const ROW: P2pOrderRow = {
   tier: 'testnet',
   kind: 'BUY',
   network: 'base',
-  contract: '0x5fbDB2315678afecb367f032d93F642f64180aa3',
+  contract: '0x5FbDB2315678afecb367f032d93F642f64180aa3',
   token: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
   tokenSymbol: 'USDC',
   tokenDecimals: 6,

@@ -15,7 +15,7 @@ export class P2pMarketTransactionEntity {
   chainId!: number;
 
   @ApiProperty({
-    example: '0x5fbDB2315678afecb367f032d93F642f64180aa3',
+    example: '0x5FbDB2315678afecb367f032d93F642f64180aa3',
     description:
       'The contract to call: the P2P market, or the token for an approval.',
   })

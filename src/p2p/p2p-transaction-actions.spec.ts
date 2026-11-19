@@ -10,7 +10,7 @@ import {
   type P2pOrderContext,
 } from '@/p2p/p2p-transaction-actions';
 
-const CONTRACT = '0x5fbDB2315678afecb367f032d93F642f64180aa3';
+const CONTRACT = '0x5FbDB2315678afecb367f032d93F642f64180aa3';
 const MATCHER = '0x90F79bf6EB2c4f870365E785982E1f101E93b906';
 const ACCOUNT = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8';
 const BUYER = '0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC';

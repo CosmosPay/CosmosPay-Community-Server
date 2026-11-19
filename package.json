@@ -43,6 +43,8 @@
     "sandbox:deploy-cusd": "ts-node -r tsconfig-paths/register --transpile-only scripts/sandbox/deploy-cusd.ts",
     "sandbox:status": "ts-node -r tsconfig-paths/register --transpile-only scripts/sandbox/status.ts",
     "sandbox:prepare": "ts-node -r tsconfig-paths/register --transpile-only scripts/sandbox/prepare.ts",
+    "p2p:deploy": "ts-node -r tsconfig-paths/register --transpile-only scripts/p2p/deploy.ts",
+    "p2p:verify-tokens": "ts-node -r tsconfig-paths/register --transpile-only scripts/p2p/verify-tokens.ts",
     "zk:deploy-testnet": "ts-node -r tsconfig-paths/register --transpile-only scripts/zk/deploy-testnet.ts",
     "zk:e2e-testnet": "ts-node -r tsconfig-paths/register --transpile-only scripts/zk/e2e-testnet.ts"
   },

@@ -181,6 +181,12 @@ describe('P2PMarket codec against viem', () => {
       [p2pCalldata.owner(), 'owner', []],
       [p2pCalldata.arbiter(), 'arbiter', []],
       [p2pCalldata.treasury(), 'treasury', []],
+      [p2pCalldata.setToken(t, true), 'setToken', [t, true]],
+      [
+        p2pCalldata.transferOwnership(MERCHANT),
+        'transferOwnership',
+        [MERCHANT],
+      ],
     ];
     for (const [ours, name, args] of cases) {
       expect(ours).toBe(viemCall(name, args));

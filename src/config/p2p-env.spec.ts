@@ -4,7 +4,7 @@ import {
   isContractValue,
 } from '@/config/p2p-env';
 
-const CONTRACT = '0x5fbDB2315678afecb367f032d93F642f64180aa3';
+const CONTRACT = '0x5FbDB2315678afecb367f032d93F642f64180aa3';
 const MATCHER = `0x${'6a'.repeat(32)}`;
 const DATA_KEY = Buffer.alloc(32, 7).toString('base64');
 

@@ -5,7 +5,7 @@ function cipher(key: string): P2pDataCipher {
   const config = {
     get: () => ({ dataEncryptionKey: key }),
   } as unknown as ConfigService<never, true>;
-  return new P2pDataCipher(config as never);
+  return new P2pDataCipher(config);
 }
 
 const KEY = Buffer.alloc(32, 7).toString('base64');

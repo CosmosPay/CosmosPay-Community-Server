@@ -113,6 +113,9 @@ export const P2P_MARKET_FUNCTIONS = {
   owner: 'owner()',
   arbiter: 'arbiter()',
   treasury: 'treasury()',
+  // The owner's, for the deploy script: this service never holds the owner key.
+  setToken: 'setToken(address,bool)',
+  transferOwnership: 'transferOwnership(address)',
 } as const;
 export type P2pMarketFunction = keyof typeof P2P_MARKET_FUNCTIONS;
 
@@ -208,6 +211,10 @@ export const p2pCalldata = {
   owner: () => SELECTORS.owner,
   arbiter: () => SELECTORS.arbiter,
   treasury: () => SELECTORS.treasury,
+  setToken: (token: string, allowed: boolean) =>
+    SELECTORS.setToken + addressWord(token) + boolWord(allowed),
+  transferOwnership: (to: string) =>
+    SELECTORS.transferOwnership + addressWord(to),
 };
 
 /**
