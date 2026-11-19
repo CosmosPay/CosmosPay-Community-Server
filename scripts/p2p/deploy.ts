@@ -143,7 +143,7 @@ async function verify(
   tokens: readonly P2pToken[],
   owner: string | undefined,
 ): Promise<void> {
-  const [code, expected, onchainOwner] = await Promise.all([
+  const [code, expected] = await Promise.all([
     rpc<string>('eth_getCode', [contract, 'latest']),
     rpc<string>('eth_call', [
       {
@@ -156,15 +156,19 @@ async function verify(
       },
       'latest',
     ]),
-    rpc<string>('eth_call', [
-      { to: contract, data: p2pCalldata.owner() },
-      'latest',
-    ]),
   ]);
-  const problems: string[] = [];
   if (code === '0x' || code.toLowerCase() !== expected.toLowerCase()) {
-    problems.push(`the code at ${contract} is not this build's P2PMarket`);
+    throw new Error(
+      code === '0x'
+        ? `Deployment check failed: there is no contract at ${contract}`
+        : `Deployment check failed: the code at ${contract} is not this build's P2PMarket`,
+    );
   }
+  const problems: string[] = [];
+  const onchainOwner = await rpc<string>('eth_call', [
+    { to: contract, data: p2pCalldata.owner() },
+    'latest',
+  ]);
   const currentOwner = decodeAddress(onchainOwner);
   console.log(`owner: ${currentOwner}`);
   if (owner && currentOwner !== owner) {
