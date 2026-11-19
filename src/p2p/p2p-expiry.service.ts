@@ -86,6 +86,17 @@ export class P2pExpiryService extends ScheduledJob {
         OR: [
           { status: 'awaiting_acceptance', acceptDeadline: { lt: cutoff } },
           { status: 'awaiting_payment', paymentDeadline: { lt: cutoff } },
+          // A failed order that opened after all (the indexer recorded it).
+          {
+            status: 'failed',
+            chainStatus: 'Offered',
+            acceptDeadline: { lt: cutoff },
+          },
+          {
+            status: 'failed',
+            chainStatus: 'Active',
+            paymentDeadline: { lt: cutoff },
+          },
         ],
       },
       orderBy: { updatedAt: 'asc' },
@@ -105,8 +116,15 @@ export class P2pExpiryService extends ScheduledJob {
       if (!d || !order.onchainId) continue;
       try {
         const onchain = await this.reader.getOrder(d, BigInt(order.onchainId));
-        if (onchain.status !== 'Offered' && onchain.status !== 'Active')
+        if (onchain.status !== 'Offered' && onchain.status !== 'Active') {
+          // Moved on-chain already; a failed order is not followed by the
+          // indexer, so record where it went and stop looking at it.
+          await this.prisma.p2pOrder.updateMany({
+            where: { id: order.id, status: 'failed' },
+            data: { chainStatus: onchain.status },
+          });
           continue;
+        }
         await this.matcher.send(d, {
           kind: 'cancel',
           orderId: order.id,

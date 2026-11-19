@@ -378,19 +378,116 @@ export function toCheckoutOrderView(
 }
 
 /**
- * The body of an order's webhook: the order's public fields and the role of
- * the consumer receiving it. Never a payment method, a payer's identity or a
- * beneficiary's account: a webhook is a notification, the route is the read.
+ * The keys an order's webhook carries to its CLIENT (the consumer that created
+ * it): its own order as `GET /v1/p2p/orders/{id}` answers it, minus
+ * `paymentDetails` (the merchant's account: personal data, read on the route).
+ */
+export const P2P_CLIENT_WEBHOOK_KEYS = [
+  'id',
+  'kind',
+  'status',
+  'tier',
+  'network',
+  'chainId',
+  'contract',
+  'token',
+  'tokenSymbol',
+  'tokenDecimals',
+  'currency',
+  'rail',
+  'price',
+  'fiatAmount',
+  'tokenAmount',
+  'netAmount',
+  'protocolFeeBps',
+  'integratorFeeBps',
+  'bond',
+  'sellerAddress',
+  'buyerAddress',
+  'merchant',
+  'onchainId',
+  'acceptDeadline',
+  'paymentDeadline',
+  'paidAt',
+  'endedAt',
+  'txHashes',
+  'settlement',
+  'paidReference',
+  'failureReason',
+  'chargeId',
+  'payoutBatchId',
+  'externalReference',
+  'createdAt',
+  'updatedAt',
+] as const satisfies readonly (keyof P2pMarketOrderEntity)[];
+
+/**
+ * The keys an order's webhook carries to its MERCHANT: the merchant order
+ * projection (`GET /v1/p2p/merchant/orders/{id}`), minus `payer` and
+ * `beneficiary`. Nothing the client keeps for itself (`externalReference`,
+ * `chargeId`, `payoutBatchId`, its integrator fee) ever reaches the merchant.
+ */
+export const P2P_MERCHANT_WEBHOOK_KEYS = [
+  'id',
+  'kind',
+  'status',
+  'tier',
+  'network',
+  'chainId',
+  'contract',
+  'merchantAccountId',
+  'merchantSide',
+  'token',
+  'tokenSymbol',
+  'tokenDecimals',
+  'currency',
+  'rail',
+  'price',
+  'fiatAmount',
+  'tokenAmount',
+  'netAmount',
+  'bond',
+  'sellerAddress',
+  'buyerAddress',
+  'onchainId',
+  'acceptDeadline',
+  'paymentDeadline',
+  'paidAt',
+  'endedAt',
+  'txHashes',
+  'settlement',
+  'paidReference',
+  'createdAt',
+  'updatedAt',
+] as const satisfies readonly (keyof P2pMarketMerchantOrderEntity)[];
+
+function pickKeys<T extends object>(
+  view: T,
+  keys: readonly (keyof T)[],
+): Record<string, unknown> {
+  return Object.fromEntries(keys.map((k) => [k, view[k]]));
+}
+
+/**
+ * The body of an order's webhook for one role: an explicit allowlist of that
+ * role's own projection, plus the role. Never a payment method, a payer's
+ * identity or a beneficiary's account for either role: delivery bodies are
+ * stored in plain text (`webhook_delivery`), which would undo the seal at
+ * rest; the routes are where an entitled party reads them.
  */
 export function toOrderWebhookData(
   row: P2pOrderRow,
   chainId: number,
   role: 'client' | 'merchant',
 ): Record<string, unknown> {
-  const view = toOrderView(row, chainId, null);
-  const { paymentDetails: _omitted, ...rest } = view;
-  void _omitted;
-  return { ...rest, role };
+  const body =
+    role === 'client'
+      ? pickKeys(toOrderView(row, chainId, null), P2P_CLIENT_WEBHOOK_KEYS)
+      : pickKeys(
+          toMerchantOrderView(row, chainId, { payer: null, beneficiary: null }),
+          P2P_MERCHANT_WEBHOOK_KEYS,
+        );
+  return { ...body, role };
 }
 
 export const P2P_CHARGE_SELECT = {

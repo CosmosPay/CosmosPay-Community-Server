@@ -1,10 +1,9 @@
 import { Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import type { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { page, type Page } from '@/common/pagination';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
-import type { AppConfig, StellarNetwork } from '@/config/configuration';
+import type { StellarNetwork } from '@/config/configuration';
 import { PrismaService } from '@/prisma/prisma.service';
 import type {
   CreateP2pMarketOfferDto,
@@ -36,7 +35,6 @@ import {
 @Injectable()
 export class P2pOffersService {
   constructor(
-    private readonly config: ConfigService<AppConfig, true>,
     private readonly prisma: PrismaService,
     private readonly consumers: ConsumerResolverService,
     private readonly accounts: P2pAccountsService,

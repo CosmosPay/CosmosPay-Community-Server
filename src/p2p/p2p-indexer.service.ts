@@ -451,7 +451,26 @@ export class P2pIndexerService extends ScheduledJob {
           : new Date((at + expected.paymentWindow) * 1000),
       },
     });
-    if (moved.count !== 1) return;
+    if (moved.count !== 1) {
+      // An order we already failed (its open was never confirmed to us) that
+      // opened after all still locks tokens: record where it is, without
+      // reviving it, so the expiry job cancels it once its deadline passes.
+      await this.prisma.p2pOrder.updateMany({
+        where: { id: row.id, status: 'failed', onchainId: null },
+        data: {
+          onchainId: event.id.toString(),
+          chainStatus: bonded ? 'Offered' : 'Active',
+          openTxHash: log.txHash,
+          acceptDeadline: bonded
+            ? new Date((at + expected.acceptWindow) * 1000)
+            : null,
+          paymentDeadline: bonded
+            ? null
+            : new Date((at + expected.paymentWindow) * 1000),
+        },
+      });
+      return;
+    }
     const after = await this.prisma.p2pOrder.findUnique({
       where: { id: row.id },
       select: P2P_ORDER_SELECT,

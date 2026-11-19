@@ -81,6 +81,18 @@ export const TERMINAL_WEBHOOK_EVENTS = [
   'PROTECTED_PAYMENT_RESOLVED',
   'PROTECTED_PAYMENT_EXPIRED',
   'PROTECTED_PAYMENT_CANCELLED',
+  // Durability: the P2P indexer is the only writer of an order's end (a
+  // compare-and-swap per event), and the tokens moved on-chain whatever happens
+  // to this pod. Each event goes to the order's client (epoch 0) and to its
+  // merchant (epoch 1), two claims; a charge's success is one claim per paying
+  // order (its paid count is the epoch).
+  'P2P_ORDER_COMPLETED',
+  'P2P_ORDER_CANCELLED',
+  'P2P_ORDER_EXPIRED',
+  'P2P_ORDER_RESOLVED',
+  'P2P_ORDER_FAILED',
+  'P2P_CHARGE_SUCCEEDED',
+  'P2P_PAYOUT_BATCH_COMPLETED',
 ] as const satisfies readonly WebhookEventType[];
 
 export type TerminalWebhookEventType = (typeof TERMINAL_WEBHOOK_EVENTS)[number];

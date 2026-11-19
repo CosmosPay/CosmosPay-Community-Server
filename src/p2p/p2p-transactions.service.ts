@@ -1,10 +1,9 @@
 import { Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { toChecksumAddress } from '@/chains/chain-address';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import type { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
-import type { AppConfig, StellarNetwork } from '@/config/configuration';
+import type { StellarNetwork } from '@/config/configuration';
 import { PrismaService } from '@/prisma/prisma.service';
 import type { BuildP2pMarketTransactionDto } from '@/p2p/dto/p2p-transaction.dto';
 import type { P2pMarketTransactionEntity } from '@/p2p/entities/p2p-transaction.entity';
@@ -32,7 +31,6 @@ import { P2P_ORDER_SELECT, type P2pOrderRow } from '@/p2p/p2p-views';
 @Injectable()
 export class P2pTransactionsService {
   constructor(
-    private readonly config: ConfigService<AppConfig, true>,
     private readonly prisma: PrismaService,
     private readonly consumers: ConsumerResolverService,
     private readonly accounts: P2pAccountsService,

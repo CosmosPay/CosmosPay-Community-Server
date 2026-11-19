@@ -1,8 +1,6 @@
 import { Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import type { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
-import type { AppConfig } from '@/config/configuration';
 import { PrismaService } from '@/prisma/prisma.service';
 import { P2pNetworksService } from '@/p2p/p2p-networks.service';
 import type { P2pMarketTransferMatchesDto } from '@/p2p/dto/p2p-transaction.dto';
@@ -32,7 +30,6 @@ const CANDIDATES = 50;
 @Injectable()
 export class P2pTransferMatchesService {
   constructor(
-    private readonly config: ConfigService<AppConfig, true>,
     private readonly prisma: PrismaService,
     private readonly consumers: ConsumerResolverService,
     private readonly orders: P2pOrdersService,

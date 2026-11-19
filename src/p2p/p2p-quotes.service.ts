@@ -183,7 +183,6 @@ export class P2pQuotesService {
         dto.tokenAmount !== undefined ? BigInt(dto.tokenAmount) : undefined,
       protocolFeeBps: protocol.feeBps,
       integratorFeeBps,
-      counterparty: integratorAddress ?? undefined,
     });
     if (!match) throw noMatch();
     const decimals = P2P_CURRENCIES[dto.currency as P2pCurrency].decimals;

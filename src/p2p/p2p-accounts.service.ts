@@ -1,6 +1,5 @@
 import { randomBytes } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { toChecksumAddress } from '@/chains/chain-address';
 import { verifyMessageSignature } from '@/chains/message-signature';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
@@ -8,7 +7,7 @@ import type { GatewayConsumer } from '@/common/interfaces/gateway-consumer.inter
 import { page, type Page } from '@/common/pagination';
 import { isUniqueViolation } from '@/common/prisma-errors';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
-import type { AppConfig, StellarNetwork } from '@/config/configuration';
+import type { StellarNetwork } from '@/config/configuration';
 import { PrismaService } from '@/prisma/prisma.service';
 import type { PaginationQueryDto } from '@/common/dto/pagination.query.dto';
 import type {
@@ -49,7 +48,6 @@ const CHALLENGES_TRIED = 5;
 @Injectable()
 export class P2pAccountsService {
   constructor(
-    private readonly config: ConfigService<AppConfig, true>,
     private readonly prisma: PrismaService,
     private readonly consumers: ConsumerResolverService,
     private readonly networks: P2pNetworksService,
