@@ -127,21 +127,22 @@ describe('Solana and Monad wiring (e2e)', () => {
       );
     });
 
-    it('refuses an open amount on Arc without deposit addresses, as on Monad', async () => {
-      const res = await asTenant(
-        request(http()).post('/v1/payment-intents/pay'),
-      ).send({ chain: 'arc', destination: EVM_DEST });
-      expect(res.status).toBe(400);
-      expect(res.body.code).toBe('invalid_amount');
-      expect(res.body.message).toMatch(/amount is required on arc/);
-    });
-
-    it('refuses more decimals than USDC has before any node is asked', async () => {
-      const res = await asTenant(
-        request(http()).post('/v1/payment-intents/pay'),
-      ).send({ chain: 'arc', destination: EVM_DEST, amount: '1.0000001' });
-      expect(res.status).toBe(400);
-      expect(res.body.code).toBe('invalid_amount');
+    it('refuses every Arc link while the deployment issues no Arc deposit addresses, before any node is asked', async () => {
+      // No ARC_RELAYER_PRIVATE_KEY here: Arc has no direct mode, so neither an
+      // open amount nor a fixed one gets a link that pays the merchant directly.
+      for (const body of [
+        { chain: 'arc', destination: EVM_DEST },
+        { chain: 'arc', destination: EVM_DEST, amount: '1' },
+      ]) {
+        const res = await asTenant(
+          request(http()).post('/v1/payment-intents/pay'),
+        ).send(body);
+        expect(res.status).toBe(400);
+        expect(res.body.code).toBe('network_unsupported');
+        expect(res.body.message).toMatch(
+          /^Payment links on Arc are not available on this deployment/,
+        );
+      }
     });
 
     it('refuses a same-chain swap on Arc: no swap route', async () => {

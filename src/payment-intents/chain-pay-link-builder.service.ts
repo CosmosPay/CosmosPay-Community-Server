@@ -28,6 +28,7 @@ import type { StellarNetwork } from '@/config/configuration';
 import { eip681Uri } from '@/evm/eip681';
 import { EvmRpcClient } from '@/evm/evm-rpc.client';
 import {
+  EVM_DIRECT_PAY_LINKS,
   EVM_NATIVE_TOKEN_INTERFACES,
   EVM_TOKEN_PRESETS,
   type EvmChain,
@@ -248,12 +249,21 @@ export class ChainPayLinkBuilder {
   /**
    * An EIP-681 link on an EVM chain (Monad, Arc). On Arc the asset is never
    * the bare coin: USDC is charged through its ERC-20 interface (see
-   * `evmPresetOf`), so the link is a `transfer` on that contract in 6 decimals.
+   * `evmPresetOf`), so the link is a `transfer` on that contract in 6 decimals,
+   * and only to a deposit address: without the relayer an Arc link is refused
+   * (`evmPayLinkRefusal`).
    */
   private async evmPay(
     chain: EvmChain,
     request: ChainPayRequest,
   ): Promise<ChainPayLink> {
+    const relayed = this.deposits.isEnabled(chain);
+    // Before any node is asked: a chain whose links need deposit addresses
+    // has none to give without its relayer.
+    const refusal = evmPayLinkRefusal(chain, relayed);
+    if (refusal !== null) {
+      throw ApiError.badRequest(ApiErrorCode.NetworkUnsupported, refusal);
+    }
     if (request.msg !== undefined) {
       throw ApiError.badRequest(
         ApiErrorCode.ValidationFailed,
@@ -273,7 +283,6 @@ export class ChainPayLinkBuilder {
         this.evm.erc20Decimals(chain, request.network, token),
       ));
     const chainId = this.evm.chainId(chain, request.network);
-    const relayed = this.deposits.isEnabled(chain);
     if (request.merchantFee && !relayed) {
       throw ApiError.badRequest(
         ApiErrorCode.MerchantFeeUnsupported,
@@ -358,8 +367,9 @@ export class ChainPayLinkBuilder {
   }
 
   /**
-   * Without a relayer: the payer pays the merchant directly. An EVM payment
-   * carries no memo, so the amount is part of what identifies it — an
+   * Without a relayer, on a chain that allows it (Monad, never Arc:
+   * `EVM_DIRECT_PAY_LINKS`): the payer pays the merchant directly. An EVM
+   * payment carries no memo, so the amount is part of what identifies it — an
    * open-amount link could be settled by any transfer.
    */
   private async evmDirect(
@@ -435,6 +445,25 @@ export class ChainPayLinkBuilder {
     }
     return { code: request.assetCode.toUpperCase(), issuer, decimals };
   }
+}
+
+/**
+ * Why a payment link on `chain` cannot be created on this deployment, or null
+ * when it can. A chain whose links are not allowed to pay the merchant
+ * directly (`EVM_DIRECT_PAY_LINKS`: Arc) needs deposit addresses, so it is
+ * refused while its relayer is off. The same answer drives the create and the
+ * networks catalog, so a form never offers a network the create refuses. The
+ * message names no setting: the operator reads that in the README.
+ */
+export function evmPayLinkRefusal(
+  chain: EvmChain,
+  relayed: boolean,
+): string | null {
+  if (relayed || EVM_DIRECT_PAY_LINKS[chain]) return null;
+  return (
+    `Payment links on ${CHAIN_DISPLAY_NAMES[chain]} are not available on this deployment: ` +
+    'each one is paid to an address made for that payment, and this deployment does not issue them.'
+  );
 }
 
 /** Whether a request means the chain's own coin. */

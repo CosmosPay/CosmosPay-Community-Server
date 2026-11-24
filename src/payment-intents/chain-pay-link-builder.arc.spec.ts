@@ -2,6 +2,7 @@ import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { ARC_USDC, EVM_TOKEN_PRESETS } from '@/evm/evm.constants';
 import {
   ChainPayLinkBuilder,
+  evmPayLinkRefusal,
   evmPresetOf,
 } from '@/payment-intents/chain-pay-link-builder.service';
 
@@ -103,96 +104,43 @@ describe('evmPresetOf: what a code alone names on Arc', () => {
   });
 });
 
-describe('ChainPayLinkBuilder on Arc, paying the merchant directly', () => {
-  it('builds the EIP-681 transfer on USDC’s interface with Arc’s chain id, in 6 decimals', async () => {
-    const { builder, evm } = make();
-    const link = await builder.build('arc', {
-      network: 'public',
-      destination: DEST.toLowerCase(),
-      amount: '12.5',
-      memo: '42',
-    });
-    expect(link.uri).toBe(
-      `ethereum:${ARC_USDC}@5042/transfer?address=${DEST}&uint256=12500000`,
-    );
-    expect(link).toMatchObject({
-      destination: DEST,
-      asset: 'USDC',
-      assetIssuer: ARC_USDC,
-      assetDecimals: 6,
-      chainReference: null,
-      chainCursor: '72862339',
-      networkFee: null,
-      deposit: null,
-    });
-    // A preset needs no on-chain read of its decimals.
-    expect(evm.erc20Decimals).not.toHaveBeenCalled();
-    expect(evm.blockNumber).toHaveBeenCalledWith('arc', 'public');
-  });
-
-  it('writes Arc Testnet’s chain id for a dev key, and its EURC', async () => {
-    const { builder } = make();
-    const link = await builder.build('arc', {
-      network: 'testnet',
-      destination: DEST,
-      amount: '3',
-      assetCode: 'EURC',
-      memo: '42',
-    });
-    expect(link.uri).toBe(
-      `ethereum:${EURC_TESTNET}@5042002/transfer?address=${DEST}&uint256=3000000`,
-    );
-  });
-
-  it('accepts any other ERC-20 by contract, reading its decimals on Arc', async () => {
-    const { builder, evm } = make({ erc20Decimals: 18 });
-    const link = await builder.build('arc', {
-      network: 'public',
-      destination: DEST,
-      amount: '1',
-      assetCode: 'weth',
-      assetIssuer: OTHER_TOKEN,
-      memo: '42',
-    });
-    expect(evm.erc20Decimals).toHaveBeenCalledWith(
-      'arc',
-      'public',
-      OTHER_TOKEN,
-    );
-    expect(link).toMatchObject({ asset: 'WETH', assetDecimals: 18 });
-    expect(link.uri).toBe(
-      `ethereum:${OTHER_TOKEN}@5042/transfer?address=${DEST}&uint256=1000000000000000000`,
-    );
-  });
-
-  it('needs an amount, at most 6 decimals for USDC, and takes no msg or merchant fee', async () => {
-    const base = { network: 'public' as const, destination: DEST, memo: '42' };
-    expect(await codeOf(make().builder.build('arc', base))).toBe(
-      ApiErrorCode.InvalidAmount,
-    );
-    expect(
-      await codeOf(
-        make().builder.build('arc', { ...base, amount: '1.0000001' }),
-      ),
-    ).toBe(ApiErrorCode.InvalidAmount);
-    expect(
-      await codeOf(
-        make().builder.build('arc', { ...base, amount: '1', msg: 'hi' }),
-      ),
-    ).toBe(ApiErrorCode.ValidationFailed);
-    const err = (await make()
-      .builder.build('arc', {
+describe('ChainPayLinkBuilder on Arc without deposit addresses', () => {
+  it('refuses every Arc link before any node is asked: there is no direct mode on Arc', async () => {
+    const base = { destination: DEST, memo: '42' };
+    for (const request of [
+      { ...base, network: 'public' as const, amount: '12.5' },
+      { ...base, network: 'testnet' as const, amount: '3', assetCode: 'EURC' },
+      { ...base, network: 'public' as const },
+      {
         ...base,
+        network: 'public' as const,
         amount: '1',
         merchantFee: { bps: 100, wallet: FEE_WALLET },
-      })
-      .then(
+      },
+    ]) {
+      const { builder, evm } = make();
+      const err = (await builder.build('arc', request).then(
         () => null,
         (e: unknown) => e,
       )) as ApiError;
-    expect(err.code).toBe(ApiErrorCode.MerchantFeeUnsupported);
-    expect(err.message).toMatch(/payment link on Arc/);
-    expect(err.message).toMatch(/ARC_RELAYER_PRIVATE_KEY/);
+      expect(err).toBeInstanceOf(ApiError);
+      expect(err.code).toBe(ApiErrorCode.NetworkUnsupported);
+      expect(err.getStatus()).toBe(400);
+      expect(err.message).toMatch(
+        /^Payment links on Arc are not available on this deployment/,
+      );
+      // Neutral: no setting named to the caller.
+      expect(err.message).not.toMatch(/RELAYER|PRIVATE_KEY/);
+      expect(evm.blockNumber).not.toHaveBeenCalled();
+      expect(evm.erc20Decimals).not.toHaveBeenCalled();
+    }
+  });
+
+  it('answers the same refusal the networks catalog reports, and none with a relayer', () => {
+    expect(evmPayLinkRefusal('arc', false)).toMatch(/not available/);
+    expect(evmPayLinkRefusal('arc', true)).toBeNull();
+    // Monad keeps its direct links without a relayer.
+    expect(evmPayLinkRefusal('monad', false)).toBeNull();
   });
 
   it('normalizes a request to what it stores, so a replay compares like with like', () => {
@@ -210,6 +158,77 @@ describe('ChainPayLinkBuilder on Arc, paying the merchant directly', () => {
     expect(builder.normalize('monad', 'public', { destination: DEST })).toEqual(
       { destination: DEST, asset: 'native', assetIssuer: null },
     );
+  });
+});
+
+describe('ChainPayLinkBuilder on Arc: assets and amounts', () => {
+  it('writes Arc mainnet’s chain id in 6 decimals, with no on-chain read for a preset', async () => {
+    const { builder, evm } = make({ deposits: deposits(16_250n) });
+    const link = await builder.build('arc', {
+      network: 'public',
+      destination: DEST.toLowerCase(),
+      amount: '12.5',
+      memo: '42',
+    });
+    expect(link.uri).toBe(
+      `ethereum:${ARC_USDC}@5042/transfer?address=${DEPOSIT}&uint256=12500000`,
+    );
+    expect(link).toMatchObject({
+      destination: DEST,
+      asset: 'USDC',
+      assetIssuer: ARC_USDC,
+      assetDecimals: 6,
+    });
+    expect(evm.erc20Decimals).not.toHaveBeenCalled();
+  });
+
+  it('writes Arc Testnet’s chain id for a dev key, and its EURC', async () => {
+    const { builder } = make({ deposits: deposits(0n) });
+    const link = await builder.build('arc', {
+      network: 'testnet',
+      destination: DEST,
+      amount: '3',
+      assetCode: 'EURC',
+      memo: '42',
+    });
+    expect(link.uri).toBe(
+      `ethereum:${EURC_TESTNET}@5042002/transfer?address=${DEPOSIT}&uint256=3000000`,
+    );
+  });
+
+  it('accepts any other ERC-20 by contract, reading its decimals on Arc', async () => {
+    const { builder, evm } = make({
+      erc20Decimals: 18,
+      deposits: deposits(0n),
+    });
+    const link = await builder.build('arc', {
+      network: 'public',
+      destination: DEST,
+      amount: '1',
+      assetCode: 'weth',
+      assetIssuer: OTHER_TOKEN,
+      memo: '42',
+    });
+    expect(evm.erc20Decimals).toHaveBeenCalledWith(
+      'arc',
+      'public',
+      OTHER_TOKEN,
+    );
+    expect(link).toMatchObject({ asset: 'WETH', assetDecimals: 18 });
+    expect(link.uri).toBe(
+      `ethereum:${OTHER_TOKEN}@5042/transfer?address=${DEPOSIT}&uint256=1000000000000000000`,
+    );
+  });
+
+  it('takes at most 6 decimals for USDC, and no msg', async () => {
+    const base = { network: 'public' as const, destination: DEST, memo: '42' };
+    const relayed = () => make({ deposits: deposits(16_250n) }).builder;
+    expect(
+      await codeOf(relayed().build('arc', { ...base, amount: '1.0000001' })),
+    ).toBe(ApiErrorCode.InvalidAmount);
+    expect(
+      await codeOf(relayed().build('arc', { ...base, amount: '1', msg: 'hi' })),
+    ).toBe(ApiErrorCode.ValidationFailed);
   });
 });
 

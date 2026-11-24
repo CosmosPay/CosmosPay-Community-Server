@@ -113,14 +113,29 @@ describe('EvmDepositAddressFactory on Arc', () => {
     expect(terms.token).toBe(USDC);
   });
 
-  it('rounds a sub-micro gas fee up, never down', async () => {
+  it('never quotes under Arc’s 20 gwei floor, whatever eth_gasPrice answers', async () => {
     const { factory, rpc } = arc();
+    // A node answering under the floor: the relayer will bid 20 gwei anyway,
+    // so the payer's fee is priced at 20 gwei, not at what the node said.
     rpc.gasPrice.mockResolvedValue(1n);
     const terms = await factory.mint('arc', 'public', DEST, {
       address: USDC,
       decimals: 6,
     });
-    expect(terms.fee).toBe(1n);
+    // 520k gas × 20 gwei × 1.25 = 0.013 USDC.
+    expect(terms.fee).toBe(13_000n);
+    const native = await factory.mint('arc', 'public', DEST, null);
+    // 450k gas × 20 gwei × 1.25 = 0.01125 USDC, in 18 decimals.
+    expect(native.fee).toBe(11_250_000_000_000_000n);
+  });
+
+  it('keeps Monad’s quote as the node answers it: its floor is zero', async () => {
+    const factory = make();
+    const rpc = (factory as unknown as { rpc: { gasPrice: jest.Mock } }).rpc;
+    rpc.gasPrice.mockResolvedValue(1n);
+    const terms = await factory.mint('monad', 'public', DEST, null);
+    // 450k × 1 wei × 1.25, rounded UP to a micro-MON: never down.
+    expect(terms.fee).toBe(10n ** 12n);
   });
 
   it('takes ARC_DEPOSIT_TOKEN_FEES over the gas price, and charges EURC only what is configured', async () => {

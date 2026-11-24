@@ -496,10 +496,20 @@ table. These are the rules that did not hold on their own:
   signs only forwarder deployments and
   flushes; it must never gain another use, because "it holds gas money only" is
   the whole security argument. There is one relayer key per EVM chain
-  (`MONAD_RELAYER_PRIVATE_KEY`, `ARC_RELAYER_PRIVATE_KEY`), one forwarder job for all
+  (`MONAD_RELAYER_PRIVATE_KEY`, `ARC_RELAYER_PRIVATE_KEY`; the boot refuses the same
+  key for both), one forwarder job for all
   of them (`EvmDepositForwarderService`, lock `881_011`, each row's `chain` picking its
-  RPC and relayer), and a relayer bid never goes under the chain's mempool floor
-  (`EVM_MIN_MAX_FEE_PER_GAS`: Arc drops anything under 20 gwei without an error).
+  RPC and relayer), and neither a relayer bid nor a quoted deposit fee ever goes under
+  the chain's mempool floor (`EVM_MIN_MAX_FEE_PER_GAS`: Arc drops anything under 20 gwei
+  without an error). A deployed forwarder is flushed only for a balance worth the gas
+  (`flushJustified`: above the row's fee, or a whole payment where the asset has no
+  price): a flush pays the relayer nothing, and dust would make it burn gas. An Arc
+  link exists ONLY with a deposit address (`EVM_DIRECT_PAY_LINKS`, security review
+  2026-11-24): a direct EIP-681 link is matched by destination, asset and amount, which
+  let one payer settle another's older intent and another tenant take a merchant's
+  payments first come. Without `ARC_RELAYER_PRIVATE_KEY` the create refuses Arc
+  (`400 network_unsupported`) and the networks catalog reports it unavailable, both
+  through `evmPayLinkRefusal`; Monad keeps its direct mode.
 - **Arc's USDC is its gas coin, charged through its ERC-20 interface.** One balance has
   two views: 18 decimals native, 6 through `0x3600…` (`ARC_USDC`, whose `balanceOf`
   truncates dust). An Arc link never charges the bare coin: an omitted asset, `native`

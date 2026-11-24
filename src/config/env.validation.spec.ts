@@ -446,4 +446,28 @@ describe('validateEnv: Arc', () => {
       'ARC_DEPOSIT_TOKEN_FEES',
     );
   });
+
+  it('refuses the Monad relayer key as the Arc relayer, in any spelling', () => {
+    const KEY = `0x${'cd'.repeat(32)}`;
+    expectEnvError(
+      validEnv({
+        MONAD_RELAYER_PRIVATE_KEY: KEY,
+        ARC_RELAYER_PRIVATE_KEY: KEY.slice(2).toUpperCase(),
+      }),
+      'ARC_RELAYER_PRIVATE_KEY must not be MONAD_RELAYER_PRIVATE_KEY',
+    );
+  });
+
+  it('accepts two different relayer keys, and either one alone', () => {
+    const monad = `0x${'cd'.repeat(32)}`;
+    const arc = `0x${'ef'.repeat(32)}`;
+    const envs: Record<string, string>[] = [
+      { MONAD_RELAYER_PRIVATE_KEY: monad, ARC_RELAYER_PRIVATE_KEY: arc },
+      { MONAD_RELAYER_PRIVATE_KEY: monad },
+      { ARC_RELAYER_PRIVATE_KEY: arc },
+    ];
+    for (const env of envs) {
+      expect(() => validateEnv(validEnv(env))).not.toThrow();
+    }
+  });
 });

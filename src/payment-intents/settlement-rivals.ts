@@ -59,7 +59,9 @@ const NO_RIVALS: Prisma.PaymentIntentWhereInput = { id: { in: [] } };
  * - Monad, an intent with a deposit address: none. The address exists only on
  *   this intent, and a copy aimed at it is necessarily younger.
  * - Arc: Monad's rule, for the same reasons (EIP-681, no memo, deposit
- *   addresses with a relayer).
+ *   addresses with a relayer). An Arc link is created only with a deposit
+ *   address (`EVM_DIRECT_PAY_LINKS`): without the relayer the create refuses
+ *   it, so Arc never has two direct intents left to the claim's first come.
  */
 export const SETTLEMENT_RIVAL_FILTERS: Record<
   Chain,

@@ -810,6 +810,19 @@ export function validateEnv(config: Record<string, unknown>) {
       );
     }
   }
+  // One relayer key per chain: each holds one chain's gas money and nothing
+  // else, and a shared key is one leak that empties both.
+  if (
+    validated.MONAD_RELAYER_PRIVATE_KEY &&
+    validated.ARC_RELAYER_PRIVATE_KEY &&
+    hexKey(validated.MONAD_RELAYER_PRIVATE_KEY) ===
+      hexKey(validated.ARC_RELAYER_PRIVATE_KEY)
+  ) {
+    throw new Error(
+      'ARC_RELAYER_PRIVATE_KEY must not be MONAD_RELAYER_PRIVATE_KEY: each EVM ' +
+        'chain has its own relayer key. Generate a fresh one for Arc.',
+    );
+  }
 
   if (!validated.APISIX_GATEWAY_SECRET) {
     throw new Error(

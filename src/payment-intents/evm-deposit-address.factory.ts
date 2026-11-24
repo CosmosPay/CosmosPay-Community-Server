@@ -9,6 +9,7 @@ import { EvmRpcClient } from '@/evm/evm-rpc.client';
 import {
   DEPOSIT_FEE_MARGIN_BPS,
   DEPOSIT_FEE_ROUNDING_WEI,
+  EVM_MIN_MAX_FEE_PER_GAS,
   EVM_NATIVE_TOKEN_INTERFACES,
   type EvmChain,
   FORWARDER_GAS_NATIVE,
@@ -92,13 +93,20 @@ export class EvmDepositAddressFactory {
     return formatUnits(fee, decimals);
   }
 
-  /** `gas` at today's gas price plus the margin, in wei, rounded up. */
+  /**
+   * `gas` at today's gas price plus the margin, in wei, rounded up. The price
+   * is never under the chain's mempool floor (`EVM_MIN_MAX_FEE_PER_GAS`): the
+   * relayer never bids under it, so a quote from a lower `eth_gasPrice` would
+   * charge the payer less than the forward costs.
+   */
   private async nativeFee(
     chain: EvmChain,
     network: StellarNetwork,
     gas: bigint,
   ): Promise<bigint> {
-    const price = await this.rpc.gasPrice(chain, network);
+    const quoted = await this.rpc.gasPrice(chain, network);
+    const floor = EVM_MIN_MAX_FEE_PER_GAS[chain];
+    const price = quoted < floor ? floor : quoted;
     const fee = (gas * price * DEPOSIT_FEE_MARGIN_BPS) / 10_000n;
     return (
       ((fee + DEPOSIT_FEE_ROUNDING_WEI - 1n) / DEPOSIT_FEE_ROUNDING_WEI) *

@@ -126,6 +126,23 @@ export const EVM_MIN_MAX_FEE_PER_GAS: Record<EvmChain, bigint> = {
   arc: 20_000_000_000n,
 };
 
+/**
+ * Whether a chain's payment links may pay the merchant DIRECTLY when no relayer
+ * key is configured (an EIP-681 link to the merchant's own address, recognised
+ * by destination, token and exact amount). Monad keeps that mode as it always
+ * had it. Arc never takes it: such a payment carries nothing that is the
+ * intent's own, so one customer's transfer could settle another (older) intent
+ * for the same amount, and any tenant could create intents at a merchant's
+ * address and price to take its payments first come. On Arc a link exists only
+ * with deposit addresses (`ARC_RELAYER_PRIVATE_KEY`), each one an address no
+ * other intent holds; without them Arc links are refused and the networks
+ * catalog reports Arc unavailable.
+ */
+export const EVM_DIRECT_PAY_LINKS: Record<EvmChain, boolean> = {
+  monad: true,
+  arc: false,
+};
+
 /** `keccak256("Transfer(address,address,uint256)")` — the ERC-20 transfer log. */
 export const ERC20_TRANSFER_TOPIC =
   '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';

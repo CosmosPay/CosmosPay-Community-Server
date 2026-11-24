@@ -65,7 +65,8 @@ const CLOSED = new Set(['SUCCEEDED', 'FAILED', 'CANCELLED', 'EXPIRED']);
  *     only be deployed once and the retry checks for code first.
  *   - **FORWARDED** with a token: a late token payment would otherwise sit at
  *     a deployed forwarder, which only forwards native coin by itself; it is
- *     flushed the same way.
+ *     flushed the same way. A deployed forwarder is flushed only for a balance
+ *     worth the relayer's gas (`flushJustified`), never for dust.
  *
  * Settling on the FORWARD rather than on the payer's transaction is
  * deliberate: a balance has no transaction hash to prove it, and the forward is
@@ -167,6 +168,9 @@ export class EvmDepositForwarderService extends ScheduledJob {
     // merchant fee), so a balance that does not exceed them would forward
     // nothing to the merchant. Wait for more.
     if (!deployed && balance <= fee + merchantFee) return;
+    // After it, a flush pays the relayer nothing: only a balance worth its gas
+    // is flushed, so dust sent to a forwarder cannot make the relayer burn gas.
+    if (deployed && !flushJustified(row, balance)) return;
 
     if (row.status === 'AWAITING' && !this.shouldForward(row, balance)) return;
 
@@ -324,6 +328,26 @@ function chainOf(row: Pick<EvmDepositAddress, 'chain' | 'address'>): EvmChain {
     );
   }
   return row.chain;
+}
+
+/**
+ * Whether a DEPLOYED forwarder's balance is worth a flush. A flush pays the
+ * relayer nothing (its fee was the deployment's), so each one is gas the
+ * relayer gives away, and anyone can send a forwarder dust for the price of a
+ * transfer, on Monad and Arc alike. The floor is the row's own `fee`: the price
+ * this service put on one forward in the deposit's asset when it minted the
+ * address (from the gas price, or `<CHAIN>_DEPOSIT_TOKEN_FEES`), and a flush
+ * costs less gas than that deployment. A deposit in an asset with no price (a
+ * token with no configured fee: `fee` 0) is flushed only for a whole payment,
+ * the intent's amount, and never for an open-amount intent. A balance under the
+ * floor is not lost: `flush` / `flushToken` are open to anyone and can only pay
+ * the merchant.
+ */
+function flushJustified(row: WatchedDeposit, balance: bigint): boolean {
+  const fee = BigInt(row.fee);
+  if (fee > 0n) return balance > fee;
+  const expected = row.intent ? expectedAmount(row.intent) : null;
+  return expected !== null && balance >= expected;
 }
 
 /**

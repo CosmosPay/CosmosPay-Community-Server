@@ -127,12 +127,50 @@ describe('EvmDepositForwarderService — forwarding', () => {
       data: FLUSH_CALLDATA,
     });
 
-    ({ service, relayer } = make({ balance: 5n, hasCode: true }));
+    ({ service, relayer } = make({ balance: FEE + 1n, hasCode: true }));
     await service.forwardIfFunded(row({ token: TOKEN, status: 'FORWARDED' }));
     expect(relayer.send.mock.calls[0][2]).toEqual({
       to: ADDRESS,
       data: flushTokenCalldata(TOKEN),
     });
+  });
+
+  it('never flushes a deployed forwarder for dust: the flush pays the relayer nothing', async () => {
+    // A late token payment at or under the forward's price (the row's fee).
+    for (const balance of [1n, FEE]) {
+      const { service, relayer } = make({ balance, hasCode: true });
+      await service.forwardIfFunded(row({ token: TOKEN, status: 'FORWARDED' }));
+      expect(relayer.send).not.toHaveBeenCalled();
+    }
+    // A lapsed intent's leftover at a deployed forwarder: the same floor.
+    const { service, relayer } = make({ balance: FEE, hasCode: true });
+    await service.forwardIfFunded(
+      row({ intent: intent({ status: 'EXPIRED', expiresAt: new Date(0) }) }),
+    );
+    expect(relayer.send).not.toHaveBeenCalled();
+  });
+
+  it('flushes an unpriced token (fee 0) only for a whole payment, never for an open amount', async () => {
+    const unpriced = (over: Record<string, unknown> = {}) =>
+      row({ token: TOKEN, status: 'FORWARDED', fee: '0', ...over });
+    // Monad token, 6 decimals, intent of 1: 999999 is short of a payment.
+    const tokenIntent = intent({ assetIssuer: TOKEN, assetDecimals: 6 });
+    let { service, relayer } = make({ balance: 999_999n, hasCode: true });
+    await service.forwardIfFunded(unpriced({ intent: tokenIntent }));
+    expect(relayer.send).not.toHaveBeenCalled();
+
+    ({ service, relayer } = make({ balance: 1_000_000n, hasCode: true }));
+    await service.forwardIfFunded(unpriced({ intent: tokenIntent }));
+    expect(relayer.send.mock.calls[0][2]).toEqual({
+      to: ADDRESS,
+      data: flushTokenCalldata(TOKEN),
+    });
+
+    ({ service, relayer } = make({ balance: 10n ** 30n, hasCode: true }));
+    await service.forwardIfFunded(
+      unpriced({ intent: intent({ amount: null, assetIssuer: TOKEN }) }),
+    );
+    expect(relayer.send).not.toHaveBeenCalled();
   });
 
   it('forwards a partial payment once the intent has lapsed — it is the merchant’s money', async () => {
@@ -333,6 +371,19 @@ describe('EvmDepositForwarderService on Arc', () => {
     const { service, relayer } = make({ balance: 9_999_999n });
     await service.forwardIfFunded(arcRow());
     expect(relayer.send).not.toHaveBeenCalled();
+  });
+
+  it('flushes a deployed USDC forwarder only above the forward’s USDC price', async () => {
+    let { service, relayer } = make({ balance: USDC_FEE, hasCode: true });
+    await service.forwardIfFunded(arcRow({ status: 'FORWARDED' }));
+    expect(relayer.send).not.toHaveBeenCalled();
+
+    ({ service, relayer } = make({ balance: USDC_FEE + 1n, hasCode: true }));
+    await service.forwardIfFunded(arcRow({ status: 'FORWARDED' }));
+    expect(relayer.send.mock.calls[0][2]).toEqual({
+      to: ARC_ADDRESS,
+      data: flushTokenCalldata(USDC),
+    });
   });
 
   it('follows an Arc forward on Arc', async () => {

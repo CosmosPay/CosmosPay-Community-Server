@@ -77,7 +77,7 @@ export class CreatePayPaymentIntentDto {
     description:
       'Amount the destination should receive, in the asset’s own units (XLM, ' +
       'SOL, MON, or the token). Omit to let the user enter it (e.g. ' +
-      'donations), except on Monad and Arc without deposit addresses, where the ' +
+      'donations), except on Monad without deposit addresses, where the ' +
       'amount is part of how the payment is recognised, and on the networks ' +
       'paid through deposit addresses, ' +
       'where it is what the payment is quoted for. At most 7 decimals on ' +

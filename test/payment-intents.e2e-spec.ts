@@ -541,14 +541,17 @@ describe('Payment intents CRUD (e2e)', () => {
         available: true,
         settlesThroughDeposits: false,
       });
-      // Arc Testnet is a real test network: a dev key pays Arc links natively.
+      // Arc links exist only with deposit addresses, and this deployment
+      // issues none (no ARC_RELAYER_PRIVATE_KEY): the create refuses them, so
+      // the catalog says so.
       expect(byId.arc).toMatchObject({
         name: 'Arc',
         network: 'testnet',
-        available: true,
+        available: false,
         settlesThroughDeposits: false,
         asset: null,
       });
+      expect(byId.arc.reason).toMatch(/not available on this deployment/);
       expect(byId.base).toMatchObject({
         network: 'testnet',
         available: true,

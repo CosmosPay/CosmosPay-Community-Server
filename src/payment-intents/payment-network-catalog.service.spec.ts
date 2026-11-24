@@ -13,12 +13,23 @@ const sandbox = {
   ),
 };
 
-function catalogFor(environment: 'prod' | 'dev') {
+/** A deployment with deposit addresses on `relayed` chains only. */
+function catalogFor(
+  environment: 'prod' | 'dev',
+  relayed: string[] = ['monad', 'arc'],
+) {
   const config = {
     get: (key: string) =>
       key === 'stellar' ? { network: 'testnet' } : undefined,
   } as never;
-  return new PaymentNetworkCatalog(config, sandbox as never).forConsumer({
+  const deposits = {
+    isEnabled: jest.fn((chain: string) => relayed.includes(chain)),
+  };
+  return new PaymentNetworkCatalog(
+    config,
+    sandbox as never,
+    deposits as never,
+  ).forConsumer({
     username: 'cosmos_u1',
     environment,
   } as never);
@@ -42,7 +53,7 @@ describe('PaymentNetworkCatalog', () => {
     );
   });
 
-  it('on the test networks: the three chains natively, the rest where the sandbox reaches', () => {
+  it('on the test networks: the four chains natively, the rest where the sandbox reaches', () => {
     const { data } = catalogFor('dev');
     const byId = Object.fromEntries(data.map((n) => [n.id, n]));
     expect(byId.solana).toMatchObject({ available: true, network: 'testnet' });
@@ -61,5 +72,22 @@ describe('PaymentNetworkCatalog', () => {
       available: false,
       reason: 'not here yet',
     });
+  });
+
+  it('reports Arc unavailable, on both tiers, while the deployment issues no Arc deposit addresses', () => {
+    for (const environment of ['prod', 'dev'] as const) {
+      const byId = Object.fromEntries(
+        catalogFor(environment, []).data.map((n) => [n.id, n]),
+      );
+      expect(byId.arc).toMatchObject({ available: false, asset: null });
+      expect(byId.arc.reason).toMatch(
+        /^Payment links on Arc are not available on this deployment/,
+      );
+      // The reason names no setting.
+      expect(byId.arc.reason).not.toMatch(/RELAYER|PRIVATE_KEY/);
+      // Monad keeps its direct links without a relayer, as it always had them.
+      expect(byId.monad).toMatchObject({ available: true, reason: null });
+      expect(byId.stellar).toMatchObject({ available: true, reason: null });
+    }
   });
 });

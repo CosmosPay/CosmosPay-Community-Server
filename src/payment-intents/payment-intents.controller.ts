@@ -192,11 +192,13 @@ export class PaymentIntentsController {
       'required). `invalid_amount`: more decimals than the asset has, or not ' +
       'above zero. `invalid_memo`: not a numeric MEMO_ID. ' +
       '`network_unsupported`: with a `dev` key, a network paid through ' +
-      'deposit addresses that the sandbox does not settle yet. ' +
+      'deposit addresses that the sandbox does not settle yet; or Arc on a ' +
+      'deployment that issues no Arc deposit addresses (an Arc link is paid ' +
+      'only to one, `GET /v1/payment-intents/networks` says so). ' +
       '`asset_unsupported`: the cross-chain route does not trade that asset ' +
       "on that network (in the sandbox: not the network's test stablecoin). " +
       '`merchant_fee_unsupported`: a merchant fee on such a network, or on ' +
-      'Monad or Arc without deposit addresses.',
+      'Monad without deposit addresses.',
     examples: {
       [ApiErrorCode.NetworkUnsupported]: {
         summary: 'A dev key on a network the sandbox does not settle yet',
@@ -262,10 +264,11 @@ export class PaymentIntentsController {
     description:
       'Every payment network, with whether a link can be created there with ' +
       'this key and why not. A `prod` key reaches every network on mainnet; a ' +
-      '`dev` key reaches Stellar, Solana, Monad and Arc on their test networks, and ' +
-      'the networks paid through deposit addresses where the sandbox settles ' +
-      'them, each in its test stablecoin (`asset`). Read before offering a ' +
-      'network in a form.',
+      '`dev` key reaches the four chains settled natively (Arc, Monad, Solana, ' +
+      'Stellar) on their test networks, and the networks paid through deposit ' +
+      'addresses where the sandbox settles them, each in its test stablecoin ' +
+      '(`asset`). On either tier Arc is available only where this deployment ' +
+      'issues Arc deposit addresses. Read before offering a network in a form.',
   })
   @ApiOkResponse({ type: PaymentNetworkListEntity })
   listNetworks(
