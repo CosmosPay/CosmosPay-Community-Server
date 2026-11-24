@@ -13,6 +13,13 @@ export class JsonRpcError extends Error {
     readonly code: number,
     message: string,
     readonly data?: unknown,
+    /**
+     * The node's own name for the error, where it sends one beside the code
+     * (NEAR's `cause.name`: `UNKNOWN_TRANSACTION`, `INVALID_TRANSACTION`).
+     */
+    readonly causeName?: string,
+    /** What the node says about that cause (NEAR's `cause.info`). */
+    readonly causeInfo?: unknown,
   ) {
     super(message);
     this.name = 'JsonRpcError';
@@ -41,7 +48,8 @@ let nextId = 1;
 export async function callJsonRpc<T>(
   target: JsonRpcTarget,
   method: string,
-  params: unknown[],
+  // An array for most nodes; NEAR takes its parameters as one object.
+  params: unknown[] | Record<string, unknown>,
 ): Promise<T> {
   let response: Response;
   try {
@@ -83,7 +91,12 @@ export async function callJsonRpc<T>(
 
   let body: {
     result?: T;
-    error?: { code?: number; message?: string; data?: unknown };
+    error?: {
+      code?: number;
+      message?: string;
+      data?: unknown;
+      cause?: { name?: unknown; info?: unknown };
+    };
   };
   try {
     body = JSON.parse(text) as typeof body;
@@ -95,10 +108,13 @@ export async function callJsonRpc<T>(
   }
 
   if (body.error) {
+    const cause = body.error.cause;
     throw new JsonRpcError(
       typeof body.error.code === 'number' ? body.error.code : 0,
       body.error.message ?? 'JSON-RPC error',
       body.error.data,
+      typeof cause?.name === 'string' ? cause.name : undefined,
+      cause?.info,
     );
   }
   if (!response.ok || !('result' in body)) {

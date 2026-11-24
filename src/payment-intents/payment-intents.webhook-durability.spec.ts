@@ -164,6 +164,7 @@ describe('payment intent terminal webhooks are durable', () => {
       new ConsumerResolverService(prisma as never),
       { ensureForPayer: jest.fn().mockResolvedValue(undefined) } as any,
       {} as any,
+      {} as never,
     );
   });
 

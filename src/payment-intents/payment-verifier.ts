@@ -7,6 +7,12 @@ export interface VerificationResult {
   /** The payer (source) account of the matched on-chain payment, when valid. */
   payer?: string;
   /**
+   * When the matched transaction closed on-chain (ledger close or block time),
+   * when the verifier read it. A checkout session's proof registered at or
+   * after it does not count (`receiptRecipient`).
+   */
+  paidAt?: Date;
+  /**
    * The transaction is this intent's payment — it carries the intent's
    * identifier (Stellar memo, Solana reference) and pays its destination — but
    * it failed on-chain. Only this may settle an intent as FAILED; every other

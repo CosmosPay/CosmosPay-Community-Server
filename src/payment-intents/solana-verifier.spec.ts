@@ -76,6 +76,7 @@ describe('SolanaVerifierService.verifyByHash', () => {
       valid: true,
       txHash: 'sig',
       payer: PAYER,
+      paidAt: expect.any(Date),
     });
   });
 

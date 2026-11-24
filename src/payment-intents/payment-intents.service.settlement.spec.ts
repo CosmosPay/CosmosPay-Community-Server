@@ -258,6 +258,7 @@ describe('PaymentIntentsService: one transaction settles one intent', () => {
       new ConsumerResolverService(prisma),
       { ensureForPayer: jest.fn().mockResolvedValue(undefined) } as never,
       {} as never,
+      {} as never,
     );
   });
 

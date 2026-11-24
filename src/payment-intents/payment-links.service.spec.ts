@@ -1,3 +1,5 @@
+import { Logger } from '@nestjs/common';
+import { payerTokenHash } from '@/payment-intents/payment-payer-session';
 import {
   Account,
   Keypair,
@@ -43,6 +45,7 @@ const CONTRACT_FIELDS = [
   'networkFee',
   'merchantFee',
   'payerAccountRequired',
+  'crossChainPayment',
   'expiresAt',
   'createdAt',
   'checkoutTheme',
@@ -116,6 +119,16 @@ function fullRow(overrides: Partial<PaymentIntent> = {}): PaymentIntent {
     checkoutWalletAt: null,
     checkoutWalletClosedAt: null,
     checkoutSentAt: null,
+    crossChainFeeBps: null,
+    paidFrom: null,
+    depositMaxPerPayer: null,
+    depositBudgetPerWindow: null,
+    receiptClaimedAt: null,
+    receiptSentAt: null,
+    receiptSkippedAt: null,
+    paidOnChainAt: null,
+    receiptTo: 'payer-secret@example.com',
+    receiptToAt: null,
     createdAt: CREATED,
     updatedAt: new Date('2026-10-24T12:40:00.000Z'),
     ...overrides,
@@ -145,10 +158,62 @@ describe('toPublicPaymentLink', () => {
       networkFee: null,
       merchantFee: null,
       payerAccountRequired: false,
+      // A link from before payments from other networks: no rate recorded.
+      crossChainPayment: false,
       expiresAt: '2026-10-24T13:34:56.000Z',
       createdAt: '2026-10-24T12:34:56.000Z',
       checkoutTheme: 'classic',
     });
+  });
+
+  it('offers payment from another network only when the link qualifies', () => {
+    const payable = { crossChainFeeBps: 50 };
+    expect(toPublicPaymentLink(fullRow(payable), 'qr').crossChainPayment).toBe(
+      true,
+    );
+    // A test network, an open amount, a merchant fee: the cross-chain route
+    // cannot pay them.
+    for (const overrides of [
+      { network: 'testnet' },
+      {
+        merchantFee: {
+          bps: 100,
+          fixed: '0',
+          amount: '0.255',
+          asset: 'native',
+          wallet: PAYER,
+          paidBy: 'recipient',
+        },
+      },
+    ]) {
+      expect(
+        toPublicPaymentLink(fullRow({ ...payable, ...overrides }), 'qr')
+          .crossChainPayment,
+      ).toBe(false);
+    }
+  });
+
+  it('a link on a network paid through deposits has no address to pay', () => {
+    const link = toPublicPaymentLink(
+      fullRow({
+        chain: 'base',
+        destination: EVM_MERCHANT,
+        asset: 'USDC',
+        assetIssuer: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',
+        assetDecimals: 6,
+        msg: null,
+        callback: null,
+        uri: 'https://payments.cosmospay.lat/cmh4x2k9a0001l70g8v5q3z2w',
+        crossChainFeeBps: 50,
+      }),
+      'qr',
+    );
+    expect(link.chain).toBe('base');
+    expect(link.payTo).toBeNull();
+    expect(link.crossChainPayment).toBe(true);
+    expect(link.uri).toBe(
+      'https://payments.cosmospay.lat/cmh4x2k9a0001l70g8v5q3z2w',
+    );
   });
 
   it('drops every owner-only column, even handed the full row', () => {
@@ -349,6 +414,7 @@ describe('PaymentLinksService.findPublic', () => {
       {} as never,
       {} as never,
       links,
+      {} as never,
       {} as never,
       {} as never,
       {} as never,
@@ -595,6 +661,134 @@ describe('PaymentLinksService.recordEvent', () => {
     expect(sql()).toContain('"checkoutSentAt" = ?');
   });
 
+  it("marks the reporting checkout session's `sent`, found by its token's hash only", async () => {
+    const executeRaw = jest.fn().mockResolvedValue(1);
+    const updateMany = jest.fn().mockResolvedValue({ count: 1 });
+    const service = new PaymentLinksService(
+      {
+        paymentIntent: { findUnique: jest.fn() },
+        paymentPayerSession: { updateMany },
+        evmDepositAddress: { count: jest.fn().mockResolvedValue(0) },
+        $executeRaw: executeRaw,
+      } as never,
+      links,
+      {} as never,
+      {} as never,
+    );
+    const token = 'q8V0n3cJxZr2m1bWk7yTt4uP9aLs6dEf0gHiJkLmNoQ';
+    await service.recordEvent(ID, 'sent', token);
+    const [{ where, data }] = updateMany.mock.calls[0];
+    expect(where).toEqual({ intentId: ID, tokenHash: payerTokenHash(token) });
+    expect(data.sentAt).toBeInstanceOf(Date);
+    // Another event without proof, or one without a token, marks no session.
+    await service.recordEvent(ID, 'walletOpened', token);
+    await service.recordEvent(ID, 'sent');
+    expect(updateMany).toHaveBeenCalledTimes(1);
+  });
+
+  it("registers the session's proof in its network's spelling, and refuses one of another network", async () => {
+    const executeRaw = jest.fn().mockResolvedValue(1);
+    const updateMany = jest.fn().mockResolvedValue({ count: 1 });
+    const service = new PaymentLinksService(
+      {
+        paymentIntent: {
+          findUnique: jest.fn().mockResolvedValue({ chain: 'monad' }),
+        },
+        paymentPayerSession: { updateMany },
+        evmDepositAddress: { count: jest.fn().mockResolvedValue(0) },
+        $executeRaw: executeRaw,
+      } as never,
+      links,
+      {} as never,
+      {} as never,
+    );
+    const token = 'q8V0n3cJxZr2m1bWk7yTt4uP9aLs6dEf0gHiJkLmNoQ';
+    const hash =
+      '0xB7F1C3A2D4E5F60718293A4B5C6D7E8F9A0B1C2D3E4F5A6B7C8D9E0F1A2B3C4D';
+    await service.recordEvent(ID, 'sent', token, {
+      address: '0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed',
+      txHash: hash,
+    });
+    const [{ where, data }] = updateMany.mock.calls[0];
+    expect(where.tokenHash).toBe(payerTokenHash(token));
+    expect(data.walletTxHash).toBe(hash.toLowerCase());
+    expect(data.walletAddress?.toLowerCase()).toBe(
+      '0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed',
+    );
+    expect(data.provenAt).toBeInstanceOf(Date);
+    await expect(
+      service.recordEvent(ID, 'walletOpened', token, {
+        address: 'GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ',
+      }),
+    ).rejects.toMatchObject({ code: 'validation_failed' });
+    expect(updateMany).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses to register a deposit address's forward this service sent", async () => {
+    const forward =
+      '0xc0ffee00000000000000000000000000000000000000000000000000000000ee';
+    const updateMany = jest.fn().mockResolvedValue({ count: 1 });
+    const count = jest.fn(({ where }: any) =>
+      Promise.resolve(
+        where.forwardTxHash.equals.toLowerCase() === forward ? 1 : 0,
+      ),
+    );
+    const service = new PaymentLinksService(
+      {
+        paymentIntent: {
+          findUnique: jest
+            .fn()
+            .mockResolvedValue({ chain: 'monad', txHash: null }),
+        },
+        paymentPayerSession: { updateMany },
+        evmDepositAddress: { count },
+        $executeRaw: jest.fn().mockResolvedValue(1),
+      } as never,
+      links,
+      {} as never,
+      {} as never,
+    );
+    await expect(
+      service.recordEvent(
+        ID,
+        'sent',
+        'q8V0n3cJxZr2m1bWk7yTt4uP9aLs6dEf0gHiJkLmNoQ',
+        { txHash: forward },
+      ),
+    ).rejects.toMatchObject({ code: 'validation_failed' });
+    expect(updateMany).not.toHaveBeenCalled();
+  });
+
+  it('refuses to register a transaction the observer has already seen on-chain', async () => {
+    const seen =
+      '0xb7f1c3a2d4e5f60718293a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d';
+    const updateMany = jest.fn().mockResolvedValue({ count: 1 });
+    const service = new PaymentLinksService(
+      {
+        paymentIntent: {
+          findUnique: jest
+            .fn()
+            .mockResolvedValue({ chain: 'monad', txHash: seen }),
+        },
+        paymentPayerSession: { updateMany },
+        evmDepositAddress: { count: jest.fn().mockResolvedValue(0) },
+        $executeRaw: jest.fn().mockResolvedValue(1),
+      } as never,
+      links,
+      {} as never,
+      {} as never,
+    );
+    await expect(
+      service.recordEvent(
+        ID,
+        'sent',
+        'q8V0n3cJxZr2m1bWk7yTt4uP9aLs6dEf0gHiJkLmNoQ',
+        { txHash: seen.toUpperCase().replace('0X', '0x') },
+      ),
+    ).rejects.toMatchObject({ code: 'validation_failed' });
+    expect(updateMany).not.toHaveBeenCalled();
+  });
+
   it('ignores a link that is no longer pending, and answers an unknown id as the read does', async () => {
     const settled = make(0, true);
     await expect(
@@ -606,5 +800,130 @@ describe('PaymentLinksService.recordEvent', () => {
         code: 'not_found',
       },
     );
+  });
+});
+
+describe('PaymentLinksService.recordPayer', () => {
+  const links = new Sep7LinkBuilder({} as never, {} as never, {} as never);
+  const ID = 'cmh4x2k9a0001l70g8v5q3z2w';
+
+  /* The link and its checkout sessions, in memory. */
+  function make(status = 'PENDING', exists = true) {
+    const sessions: {
+      intentId: string;
+      tokenHash: string;
+      email: string;
+      lang: string;
+    }[] = [];
+    const prisma = {
+      paymentIntent: {
+        findUnique: jest.fn(() => Promise.resolve(exists ? { status } : null)),
+      },
+      paymentPayerSession: {
+        create: jest.fn(({ data }: { data: (typeof sessions)[number] }) => {
+          sessions.push({ ...data });
+          return Promise.resolve(data);
+        }),
+        updateMany: jest.fn(
+          ({
+            where,
+            data,
+          }: {
+            where: { intentId: string; tokenHash: string };
+            data: { email: string; lang: string };
+          }) => {
+            const own = sessions.filter(
+              (x) =>
+                x.intentId === where.intentId &&
+                x.tokenHash === where.tokenHash,
+            );
+            own.forEach((x) => Object.assign(x, data));
+            return Promise.resolve({ count: own.length });
+          },
+        ),
+      },
+    };
+    const service = new PaymentLinksService(
+      prisma as never,
+      links,
+      {} as never,
+      {} as never,
+    );
+    return { service, sessions, prisma };
+  }
+
+  it('opens a session per checkout: two payers on one link both proceed, each with their own email', async () => {
+    const { service, sessions } = make();
+    const [a, b] = await Promise.all([
+      service.recordPayer(ID, { email: ' Payer@Example.com ', lang: 'es' }),
+      service.recordPayer(ID, { email: 'other@example.com' }),
+    ]);
+    expect(a.payerToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(b.payerToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(a.payerToken).not.toBe(b.payerToken);
+    expect(sessions.map((x) => x.email).sort()).toEqual([
+      'other@example.com',
+      'payer@example.com',
+    ]);
+    expect(sessions.find((x) => x.email === 'payer@example.com')?.lang).toBe(
+      'es',
+    );
+  });
+
+  it("changes a session's own email with its token, and never another session's", async () => {
+    const { service, sessions } = make();
+    const a = await service.recordPayer(ID, { email: 'typo@example.com' });
+    const b = await service.recordPayer(ID, { email: 'other@example.com' });
+    // A changes its own.
+    await expect(
+      service.recordPayer(ID, {
+        email: 'payer@example.com',
+        payerToken: a.payerToken,
+      }),
+    ).resolves.toEqual({ payerToken: a.payerToken });
+    // B cannot reach A's: whatever it sends changes B's only.
+    await service.recordPayer(ID, {
+      email: 'attacker@example.com',
+      payerToken: b.payerToken,
+    });
+    expect(sessions.map((x) => x.email)).toEqual([
+      'payer@example.com',
+      'attacker@example.com',
+    ]);
+    // A token this link does not know opens a new session; it never blocks.
+    const c = await service.recordPayer(ID, {
+      email: 'third@example.com',
+      payerToken: 'x'.repeat(43),
+    });
+    expect(c.payerToken).not.toBe('x'.repeat(43));
+    expect(sessions).toHaveLength(3);
+  });
+
+  it('stores only the hash of the token, and never logs the token', async () => {
+    const spies = (['log', 'warn', 'error', 'debug', 'verbose'] as const).map(
+      (level) =>
+        jest.spyOn(Logger.prototype, level).mockImplementation(() => undefined),
+    );
+    const { service, sessions } = make();
+    const { payerToken } = await service.recordPayer(ID, {
+      email: 'payer@example.com',
+    });
+    await service.recordPayer(ID, { email: 'payer2@example.com', payerToken });
+    expect(sessions[0].tokenHash).toBe(payerTokenHash(payerToken));
+    expect(sessions[0].tokenHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.stringify(sessions)).not.toContain(payerToken);
+    for (const spy of spies) {
+      expect(JSON.stringify(spy.mock.calls)).not.toContain(payerToken);
+      spy.mockRestore();
+    }
+  });
+
+  it('refuses a link that is no longer open, and answers an unknown id as not found', async () => {
+    await expect(
+      make('SUCCEEDED').service.recordPayer(ID, { email: 'a@b.co' }),
+    ).rejects.toMatchObject({ code: 'invalid_state_transition' });
+    await expect(
+      make('PENDING', false).service.recordPayer(ID, { email: 'a@b.co' }),
+    ).rejects.toMatchObject({ code: 'not_found' });
   });
 });

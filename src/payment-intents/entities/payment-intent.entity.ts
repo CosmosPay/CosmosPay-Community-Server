@@ -1,5 +1,9 @@
 import { ApiProperty, ApiSchema } from '@nestjs/swagger';
-import { CHAINS } from '@/chains/chains.constants';
+import { PAYMENT_NETWORKS } from '@/payment-intents/payment-networks';
+import {
+  DepositLimitsEntity,
+  PaidFromEntity,
+} from '@/payment-intents/entities/payment-deposit.entity';
 import { MerchantFeeEntity } from '@/common/merchant-fee/merchant-fee.entity';
 import {
   CHECKOUT_THEMES,
@@ -42,9 +46,12 @@ export class PaymentIntentEntity {
   status!: PaymentIntentStatus;
 
   @ApiProperty({
-    enum: CHAINS,
+    enum: PAYMENT_NETWORKS,
     example: 'stellar',
-    description: 'Chain the payment settles on. TX intents are always Stellar.',
+    description:
+      'Network the payment settles on. TX intents are always Stellar; a link ' +
+      'on a network other than Stellar, Solana and Monad is paid through ' +
+      'deposit addresses (`GET /v1/payment-intents/{id}/deposits`).',
   })
   chain!: string;
 
@@ -127,6 +134,55 @@ export class PaymentIntentEntity {
   })
   merchantFee!: MerchantFeeEntity | null;
 
+  @ApiProperty({
+    type: PaidFromEntity,
+    nullable: true,
+    description:
+      'What the payer sent when a payment from another network settled the ' +
+      'intent (then `txHash` is the payout on its own network); null otherwise.',
+  })
+  paidFrom!: PaidFromEntity | null;
+
+  @ApiProperty({
+    type: DepositLimitsEntity,
+    description:
+      'Limits on payments from another network for this link, as they apply ' +
+      '(yours, or the defaults).',
+  })
+  depositLimits!: DepositLimitsEntity;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    example: 'payer@example.com',
+    description:
+      'Where the receipt went: an email a payer gave in the hosted checkout ' +
+      '(not verified). Null until one was sent. Every email given is listed by ' +
+      '`GET /v1/payment-intents/{id}/payer-emails`.',
+  })
+  receiptTo!: string | null;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    format: 'date-time',
+    example: null,
+    description:
+      'When it was decided that no receipt goes out: no checkout session gave ' +
+      'an email, or several did and none proved the payment was theirs (a ' +
+      'wallet account or transaction matching the settlement).',
+  })
+  receiptSkippedAt!: Date | null;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    format: 'date-time',
+    example: null,
+    description: 'When the payer’s receipt was emailed; null until it was.',
+  })
+  receiptSentAt!: Date | null;
+
   @ApiProperty({ nullable: true, example: null, description: 'SEP-7 msg.' })
   msg!: string | null;
 
@@ -147,7 +203,8 @@ export class PaymentIntentEntity {
   @ApiProperty({
     description:
       'The payment link: SEP-7 on Stellar (`tx` for TX intents, `pay` for ' +
-      'PAY), a Solana Pay transfer request on Solana, EIP-681 on Monad.',
+      'PAY), a Solana Pay transfer request on Solana, EIP-681 on Monad, the ' +
+      'hosted checkout on every other network.',
     example: 'web+stellar:tx?xdr=AAAAAgAAAABx…',
   })
   uri!: string;
@@ -267,9 +324,12 @@ export class TxPaymentIntentEntity {
   status!: PaymentIntentStatus;
 
   @ApiProperty({
-    enum: CHAINS,
+    enum: PAYMENT_NETWORKS,
     example: 'stellar',
-    description: 'Chain the payment settles on. TX intents are always Stellar.',
+    description:
+      'Network the payment settles on. TX intents are always Stellar; a link ' +
+      'on a network other than Stellar, Solana and Monad is paid through ' +
+      'deposit addresses (`GET /v1/payment-intents/{id}/deposits`).',
   })
   chain!: string;
 
@@ -342,6 +402,55 @@ export class TxPaymentIntentEntity {
       'transaction; null when the request named none.',
   })
   merchantFee!: MerchantFeeEntity | null;
+
+  @ApiProperty({
+    type: PaidFromEntity,
+    nullable: true,
+    description:
+      'What the payer sent when a payment from another network settled the ' +
+      'intent (then `txHash` is the payout on its own network); null otherwise.',
+  })
+  paidFrom!: PaidFromEntity | null;
+
+  @ApiProperty({
+    type: DepositLimitsEntity,
+    description:
+      'Limits on payments from another network for this link, as they apply ' +
+      '(yours, or the defaults).',
+  })
+  depositLimits!: DepositLimitsEntity;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    example: 'payer@example.com',
+    description:
+      'Where the receipt went: an email a payer gave in the hosted checkout ' +
+      '(not verified). Null until one was sent. Every email given is listed by ' +
+      '`GET /v1/payment-intents/{id}/payer-emails`.',
+  })
+  receiptTo!: string | null;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    format: 'date-time',
+    example: null,
+    description:
+      'When it was decided that no receipt goes out: no checkout session gave ' +
+      'an email, or several did and none proved the payment was theirs (a ' +
+      'wallet account or transaction matching the settlement).',
+  })
+  receiptSkippedAt!: Date | null;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    format: 'date-time',
+    example: null,
+    description: 'When the payer’s receipt was emailed; null until it was.',
+  })
+  receiptSentAt!: Date | null;
 
   @ApiProperty({
     nullable: true,
@@ -456,7 +565,7 @@ export class TxPaymentIntentEntity {
 /** Creation response for a SEP-7 `pay` intent (no source, no xdr). */
 @ApiSchema({
   description:
-    'A `pay` intent as created: a payment link any wallet can pay (SEP-7 `pay` on Stellar, Solana Pay on Solana, EIP-681 on Monad) and its QR.',
+    'A `pay` intent as created: a payment link and its QR. On Stellar, Solana and Monad a wallet link (SEP-7 `pay`, Solana Pay, EIP-681); on every other network the hosted checkout, paid through a deposit address made for each payment.',
 })
 export class PayPaymentIntentEntity {
   @ApiProperty({
@@ -481,9 +590,12 @@ export class PayPaymentIntentEntity {
   status!: PaymentIntentStatus;
 
   @ApiProperty({
-    enum: CHAINS,
+    enum: PAYMENT_NETWORKS,
     example: 'stellar',
-    description: 'Chain the payment settles on. TX intents are always Stellar.',
+    description:
+      'Network the payment settles on. TX intents are always Stellar; a link ' +
+      'on a network other than Stellar, Solana and Monad is paid through ' +
+      'deposit addresses (`GET /v1/payment-intents/{id}/deposits`).',
   })
   chain!: string;
 
@@ -564,6 +676,55 @@ export class PayPaymentIntentEntity {
   merchantFee!: MerchantFeeEntity | null;
 
   @ApiProperty({
+    type: PaidFromEntity,
+    nullable: true,
+    description:
+      'What the payer sent when a payment from another network settled the ' +
+      'intent (then `txHash` is the payout on its own network); null otherwise.',
+  })
+  paidFrom!: PaidFromEntity | null;
+
+  @ApiProperty({
+    type: DepositLimitsEntity,
+    description:
+      'Limits on payments from another network for this link, as they apply ' +
+      '(yours, or the defaults).',
+  })
+  depositLimits!: DepositLimitsEntity;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    example: 'payer@example.com',
+    description:
+      'Where the receipt went: an email a payer gave in the hosted checkout ' +
+      '(not verified). Null until one was sent. Every email given is listed by ' +
+      '`GET /v1/payment-intents/{id}/payer-emails`.',
+  })
+  receiptTo!: string | null;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    format: 'date-time',
+    example: null,
+    description:
+      'When it was decided that no receipt goes out: no checkout session gave ' +
+      'an email, or several did and none proved the payment was theirs (a ' +
+      'wallet account or transaction matching the settlement).',
+  })
+  receiptSkippedAt!: Date | null;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    format: 'date-time',
+    example: null,
+    description: 'When the payer’s receipt was emailed; null until it was.',
+  })
+  receiptSentAt!: Date | null;
+
+  @ApiProperty({
     nullable: true,
     example: 'pay me with lumens',
     description:
@@ -589,7 +750,7 @@ export class PayPaymentIntentEntity {
     example:
       'web+stellar:pay?destination=GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO&amount=120.1234567',
     description:
-      'The payment link: SEP-7 `web+stellar:pay` on Stellar, Solana Pay on Solana, EIP-681 on Monad. With a merchant fee it is the hosted checkout on Stellar and a Solana Pay transaction request on Solana.',
+      'The payment link: SEP-7 `web+stellar:pay` on Stellar, Solana Pay on Solana, EIP-681 on Monad, the hosted checkout on every other network. With a merchant fee it is the hosted checkout on Stellar and a Solana Pay transaction request on Solana.',
   })
   uri!: string;
 

@@ -182,6 +182,8 @@ describe('EvmDepositForwarderService — confirming', () => {
       HASH,
       undefined,
       'observer',
+      // No chain time for a sweep: the receipt's proof rule fails closed.
+      undefined,
     );
   });
 
