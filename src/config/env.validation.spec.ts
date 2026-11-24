@@ -377,11 +377,27 @@ describe('validateEnv', () => {
         'KOYWE_DOCUMENT_PEPPER',
         'KOYWE_ALIAS',
         'KOYWE_CVU',
+        'KOYWE_MIN_ARS',
+        'KOYWE_MAX_ARS',
       ].map((name) => [name, '']),
     );
 
     it('reads an empty value as an unset one, as .env.example leaves them', () => {
       expect(() => validateEnv(validEnv(EMPTY))).not.toThrow();
+    });
+
+    it('reads a blank amount bound as unset, not as 0, with the plugin off', () => {
+      for (const value of ['', '  ']) {
+        expect(() =>
+          validateEnv(
+            validEnv({
+              PLUGINS_ENABLED: '',
+              KOYWE_MIN_ARS: value,
+              KOYWE_MAX_ARS: value,
+            }),
+          ),
+        ).not.toThrow();
+      }
     });
 
     it('accepts a whole set', () => {

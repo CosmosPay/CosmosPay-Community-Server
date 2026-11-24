@@ -1,5 +1,5 @@
 import { Logger } from '@nestjs/common';
-import { plainToInstance } from 'class-transformer';
+import { plainToInstance, Transform } from 'class-transformer';
 import {
   IsBooleanString,
   IsIn,
@@ -23,6 +23,25 @@ import { StrKey } from '@stellar/stellar-sdk';
 /** Validate a variable only when it holds something: an empty value is an unset one. */
 const isSet = (_: object, value: unknown) =>
   value !== undefined && value !== null && value !== '';
+
+/**
+ * A blank NUMERIC variable is an unset one too. `isSet` alone cannot see it:
+ * implicit conversion turns `''` into `0` before any validator runs (and before
+ * a `@Transform`, which is why this reads the raw value from `obj`), so a
+ * `KOYWE_MIN_ARS=` left empty failed `@Min(1)` with the plugin off.
+ */
+const blankAsUnset = ({
+  value,
+  key,
+  obj,
+}: {
+  value: unknown;
+  key: string;
+  obj: Record<string, unknown>;
+}) => {
+  const raw = obj[key];
+  return typeof raw === 'string' && raw.trim() === '' ? undefined : value;
+};
 
 const URL_OPTIONS = {
   require_protocol: true,
@@ -722,12 +741,14 @@ class EnvironmentVariables {
   @Matches(/^\d{22}$/)
   KOYWE_CVU?: string;
 
-  @IsOptional()
+  @Transform(blankAsUnset)
+  @ValidateIf(isSet)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(1)
   KOYWE_MIN_ARS?: number;
 
-  @IsOptional()
+  @Transform(blankAsUnset)
+  @ValidateIf(isSet)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(1)
   KOYWE_MAX_ARS?: number;
