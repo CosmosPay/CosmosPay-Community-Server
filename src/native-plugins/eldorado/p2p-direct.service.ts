@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { HttpException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { RateLimitService } from '@/common/services/rate-limit.service';
 import { UpstreamStatusError } from '@/common/upstream-http';
 import type { AppConfig, StellarNetwork } from '@/config/configuration';
 import {
@@ -11,8 +12,12 @@ import {
 import {
   P2P_DIRECT_COUNTRY,
   P2P_DIRECT_CURRENCY,
+  P2P_DIRECT_LOGIN_EMAIL_BUDGET,
+  P2P_DIRECT_LOGIN_REQUEST_BUDGET,
   P2P_DIRECT_PAYMENT_METHOD,
   P2P_MARKETPLACE,
+  P2P_ORDER_CANCELLED,
+  P2P_ORDER_COMPLETED,
 } from '@/native-plugins/eldorado/eldorado.constants';
 import { sessionReference } from '@/native-plugins/eldorado/p2p-market';
 import {
@@ -28,6 +33,7 @@ import {
   isPhoneCode,
   normalizeArPhone,
   parseDirectAccount,
+  processingDeadline,
   ORDER_CANCELLABLE_STATUSES,
   ORDER_PAYABLE_STATUS,
   quoteIdOf,
@@ -45,10 +51,13 @@ import {
   type ReadDirectOrder,
 } from '@/native-plugins/eldorado/p2p-direct';
 import {
+  loginEmailSubject,
   openPayerSession,
   sealPayerSession,
   sessionExpiry,
 } from '@/native-plugins/eldorado/p2p-direct-session';
+import { readOrderEvent } from '@/native-plugins/eldorado/p2p-order-event';
+import { P2pOrderEventsService } from '@/native-plugins/eldorado/p2p-order-events.service';
 import { paymentRequestUrl } from '@/native-plugins/eldorado/p2p-payment-request';
 import { P2pPaymentRequestLedger } from '@/native-plugins/eldorado/p2p-payment-request-ledger.service';
 import {
@@ -103,8 +112,13 @@ const NOT_FOUND = 'Payment request not found';
  * bound to the request and the network. Nothing about the payer (email, name,
  * account, document, token) is stored or logged: only the order id, on the
  * seller's session record, so the webhook settles the request
- * (`P2pOrderEventsService`). Marking an order paid moves the request to
- * `processing` (`markDirectProcessing`); its cancellation reopens it.
+ * (`P2pOrderEventsService`). A read of the order that finds it COMPLETED or
+ * CANCELLED goes through that same path, so a lost delivery does not leave the
+ * request waiting. Marking an order paid moves the request to `processing`
+ * (`markDirectProcessing`) until a deadline; its cancellation, or that
+ * deadline passing (`P2pDirectProcessingSweepService`), reopens it. Sign-ins
+ * are budgeted per email address and per request, beside the route's
+ * per-client budget.
  */
 @Injectable()
 export class P2pDirectService {
@@ -116,11 +130,17 @@ export class P2pDirectService {
     private readonly client: EldoradoClient,
     private readonly requests: P2pPaymentRequestsService,
     private readonly ledger: P2pPaymentRequestLedger,
+    private readonly events: P2pOrderEventsService,
+    private readonly limiter: RateLimitService,
   ) {}
 
   // --- signing in -----------------------------------------------------------
 
-  /** Emails the payer a code; `acceptLanguage` picks its language. */
+  /**
+   * Emails the payer a code; `acceptLanguage` picks its language. Counted
+   * against the request's budget and the email address's
+   * ({@link spendLoginBudget}) before the marketplace is asked.
+   */
   async login(
     id: string,
     email: string,
@@ -133,6 +153,7 @@ export class P2pDirectService {
         'email must be an email address',
       );
     }
+    await this.spendLoginBudget(request.id, email);
     const answer = await this.call('login', () =>
       this.client.sendLoginCode(
         request.network,
@@ -368,7 +389,13 @@ export class P2pDirectService {
     this.noteUnmapped(after);
     const sessionId = await this.recordOrder(request, after);
     if (after.view.status === 'confirming') {
-      await this.ledger.markDirectProcessing(request.id, sessionId, new Date());
+      const at = new Date();
+      await this.ledger.markDirectProcessing(
+        request.id,
+        sessionId,
+        at,
+        processingDeadline(after.view.dueAt ?? before.view.dueAt, at),
+      );
     }
     return after.view;
   }
@@ -493,7 +520,72 @@ export class P2pDirectService {
       throw directErrors.orderNotFound();
     }
     this.noteUnmapped(order);
+    await this.applyFinal(request, order, answer);
     return order;
+  }
+
+  /**
+   * An order read COMPLETED or CANCELLED goes through the webhook's own path
+   * ({@link P2pOrderEventsService.apply}): a completion settles the request
+   * after the same `completionProblem` checks (a BUY to its address, chain and
+   * token, in its currency, for at least its amount), a cancellation reopens it
+   * when that order made it `processing`. Every write there is conditional, so
+   * the webhook arriving as well changes nothing twice. What is applied is the
+   * marketplace's own answer to this service's call, never anything the payer
+   * sent. A failure is logged and the read still answers: the webhook, or the
+   * next read, settles it.
+   */
+  private async applyFinal(
+    request: DirectRequest,
+    order: ReadDirectOrder,
+    answer: unknown,
+  ): Promise<void> {
+    if (
+      order.rawStatus !== P2P_ORDER_COMPLETED &&
+      order.rawStatus !== P2P_ORDER_CANCELLED
+    ) {
+      return;
+    }
+    const event = readOrderEvent(answer);
+    if (!event || event.orderId !== order.view.id) return;
+    try {
+      await this.events.apply(request.network, event);
+    } catch (error) {
+      this.logger.error(
+        `Order ${order.view.id} of payment request ${request.id} read ${order.rawStatus} but could not be applied: ${describe(error)}`,
+      );
+    }
+  }
+
+  /**
+   * Counts one sign-in against the request's budget, then the email address's
+   * (an HMAC of it, `loginEmailSubject`): `429 rate_limited` past either, with
+   * `Retry-After`. The route's own budget is per client address, so a caller
+   * rotating addresses could otherwise mail one inbox, or start sign-ins on one
+   * request, without end. Off with the rest of rate limiting
+   * (`RATE_LIMIT_ENABLED=false`).
+   */
+  private async spendLoginBudget(
+    requestId: string,
+    email: string,
+  ): Promise<void> {
+    if (!this.config.get('rateLimit', { infer: true }).enabled) return;
+    const budgets = [
+      [requestId, P2P_DIRECT_LOGIN_REQUEST_BUDGET],
+      [loginEmailSubject(email, this.secret), P2P_DIRECT_LOGIN_EMAIL_BUDGET],
+    ] as const;
+    for (const [subject, policy] of budgets) {
+      const outcome = await this.limiter.hit(subject, policy);
+      if (outcome.allowed) continue;
+      const retryAfterSeconds = Math.max(
+        1,
+        Math.ceil((outcome.resetAt.getTime() - Date.now()) / 1000),
+      );
+      this.logger.warn(
+        `Sign-in budget ${policy.name} spent (payment request ${requestId}); retry in ${retryAfterSeconds}s`,
+      );
+      throw directErrors.loginBudgetSpent(retryAfterSeconds);
+    }
   }
 
   /**

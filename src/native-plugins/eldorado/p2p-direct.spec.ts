@@ -22,7 +22,9 @@ import {
   remainingLimitUsd,
   type DirectAccountInput,
   type DirectStep,
+  processingDeadline,
 } from '@/native-plugins/eldorado/p2p-direct';
+import { P2P_DIRECT_PROCESSING_GRACE_MS } from '@/native-plugins/eldorado/eldorado.constants';
 
 const REQUEST = 'cmh4x2k9a0001l70g8v5q3z2w';
 const FALLBACK = { amount: '15000', currency: 'ARS' };
@@ -655,5 +657,24 @@ describe('the direct flow’s rules', () => {
       expect(body).not.toContain('20123456786');
       expect(body).not.toMatch(/dorado/i);
     });
+  });
+});
+
+describe('the processing deadline of a direct order marked paid', () => {
+  const AT = new Date('2026-11-13T12:00:00.000Z');
+
+  it('is the order’s due time plus the grace period', () => {
+    expect(processingDeadline('2026-11-13T12:30:00.000Z', AT)).toEqual(
+      new Date(
+        Date.parse('2026-11-13T12:30:00.000Z') + P2P_DIRECT_PROCESSING_GRACE_MS,
+      ),
+    );
+  });
+
+  it('counts from now when the order has no due time, an unreadable one, or one already past', () => {
+    const fromNow = new Date(AT.getTime() + P2P_DIRECT_PROCESSING_GRACE_MS);
+    for (const due of [null, 'not a date', '2026-11-13T11:00:00.000Z']) {
+      expect(processingDeadline(due, AT)).toEqual(fromNow);
+    }
   });
 });

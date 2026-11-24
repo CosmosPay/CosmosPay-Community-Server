@@ -1,11 +1,20 @@
 import { Logger } from '@nestjs/common';
 import { ApiErrorCode } from '@/common/errors/api-error';
 import { UpstreamStatusError } from '@/common/upstream-http';
+import type { RateLimitPolicy } from '@/common/decorators/rate-limit.decorator';
 import {
+  P2P_DIRECT_LOGIN_EMAIL_BUDGET,
+  P2P_DIRECT_LOGIN_REQUEST_BUDGET,
+  P2P_DIRECT_PROCESSING_GRACE_MS,
+} from '@/native-plugins/eldorado/eldorado.constants';
+import { DirectLoginBudgetError } from '@/native-plugins/eldorado/p2p-direct';
+import {
+  loginEmailSubject,
   openPayerSession,
   sealPayerSession,
 } from '@/native-plugins/eldorado/p2p-direct-session';
 import { P2pDirectService } from '@/native-plugins/eldorado/p2p-direct.service';
+import { P2pOrderEventsService } from '@/native-plugins/eldorado/p2p-order-events.service';
 import { P2pPaymentRequestLedger } from '@/native-plugins/eldorado/p2p-payment-request-ledger.service';
 import { PaymentRequestRails } from '@/payment-request-rails/payment-request-rails';
 
@@ -27,6 +36,34 @@ const ACCOUNT = {
 };
 /** Everything about the payer that must never reach a row or a log. */
 const PAYER_DATA = [EMAIL, JWT, 'Juan', ACCOUNT.cbu, ACCOUNT.document];
+/** Where a completed order says it delivered: the request's own terms. */
+const DELIVERED = {
+  cryptoDetails: {
+    recipientAddress: ADDRESS,
+    chainId: 42161,
+    tokenAddress: USDT0,
+  },
+  transferInfo: { amountOut: '9.95', txHash: `0x${'ab'.repeat(32)}` },
+};
+
+/** The shared counter, in memory: one fixed window, counted per bucket and subject. */
+function limiter() {
+  const counts = new Map<string, number>();
+  return {
+    counts,
+    hit: jest.fn((subject: string, policy: RateLimitPolicy) => {
+      const key = `${policy.name}:${subject}`;
+      const count = (counts.get(key) ?? 0) + 1;
+      counts.set(key, count);
+      return Promise.resolve({
+        allowed: count <= policy.limit,
+        limit: policy.limit,
+        remaining: Math.max(0, policy.limit - count),
+        resetAt: new Date(Date.now() + 90_000),
+      });
+    }),
+  };
+}
 
 type Row = Record<string, unknown>;
 
@@ -102,6 +139,7 @@ function setup(
     request?: Row;
     view?: { status?: string; p2pDirect?: boolean };
     configured?: boolean;
+    rateLimited?: boolean;
   } = {},
 ) {
   const prisma = {
@@ -120,6 +158,7 @@ function setup(
         expiresAt: new Date(Date.now() + 3_600_000),
         paidAt: null,
         processingSessionId: null,
+        processingUntil: null,
         ...options.request,
       },
     ]),
@@ -185,23 +224,33 @@ function setup(
     get: jest.fn((name: string) =>
       name === 'paymentIntents'
         ? { checkoutUrl: CHECKOUT }
-        : {
-            clientId: configured ? 'client-1' : '',
-            apiReferralId: configured ? 'r-api' : '',
-            directSessionSecret: configured ? SECRET : '',
-          },
+        : name === 'rateLimit'
+          ? { enabled: options.rateLimited ?? true }
+          : {
+              clientId: configured ? 'client-1' : '',
+              apiReferralId: configured ? 'r-api' : '',
+              directSessionSecret: configured ? SECRET : '',
+            },
     ),
   };
   const ledger = new P2pPaymentRequestLedger(
     prisma as never,
     new PaymentRequestRails(),
   );
+  const events = new P2pOrderEventsService(
+    prisma as never,
+    { signer: jest.fn() } as never,
+    ledger,
+  );
+  const budgets = limiter();
   const service = new P2pDirectService(
     config as never,
     prisma as never,
     client as never,
     requests as never,
     ledger,
+    events,
+    budgets as never,
   );
   const session = sealPayerSession(
     { t: JWT, n: 'public', r: REQUEST, e: Date.now() + 60_000 },
@@ -212,6 +261,7 @@ function setup(
     client,
     prisma,
     requests,
+    budgets,
     session,
     request: prisma.p2pPaymentRequest.rows[0],
     sessions: prisma.p2pRampSession.rows,
@@ -251,6 +301,73 @@ describe('P2pDirectService', () => {
         service.login(REQUEST, EMAIL, 'pt-BR,pt;q=0.9'),
       ).resolves.toEqual({ challenge: 'otp-1', newAccount: false });
       expect(client.sendLoginCode).toHaveBeenCalledWith('public', EMAIL, 'pt');
+    });
+
+    it('counts each sign-in against the request and the email address, never the address itself', async () => {
+      const { service, budgets } = setup();
+
+      await service.login(REQUEST, EMAIL, undefined);
+
+      expect(budgets.hit).toHaveBeenCalledWith(
+        REQUEST,
+        P2P_DIRECT_LOGIN_REQUEST_BUDGET,
+      );
+      const subject = loginEmailSubject(EMAIL, SECRET);
+      expect(budgets.hit).toHaveBeenCalledWith(
+        subject,
+        P2P_DIRECT_LOGIN_EMAIL_BUDGET,
+      );
+      expect(subject).not.toContain('payer');
+    });
+
+    it('stops mailing one inbox past its budget, however the address is spelled', async () => {
+      const { service, client } = setup();
+      const spellings = [
+        EMAIL,
+        'Payer@Example.com',
+        'payer+1@example.com',
+        'PAYER+shop@example.com',
+        'payer@example.com',
+      ];
+      for (const email of spellings) {
+        await service.login(REQUEST, email, undefined);
+      }
+
+      const refusal = await service
+        .login(REQUEST, 'payer+again@example.com', undefined)
+        .catch((error: unknown) => error);
+      expect(refusal).toBeInstanceOf(DirectLoginBudgetError);
+      expect(refusal).toMatchObject({ code: ApiErrorCode.RateLimited });
+      expect((refusal as DirectLoginBudgetError).retryAfterSeconds).toBe(90);
+      expect(client.sendLoginCode).toHaveBeenCalledTimes(
+        P2P_DIRECT_LOGIN_EMAIL_BUDGET.limit,
+      );
+      // Another inbox is not held back by it.
+      await expect(
+        service.login(REQUEST, 'someone@example.com', undefined),
+      ).resolves.toMatchObject({ challenge: 'otp-1' });
+    });
+
+    it('stops starting sign-ins on one request past its budget, whatever the addresses', async () => {
+      const { service, client } = setup();
+      for (let i = 0; i < P2P_DIRECT_LOGIN_REQUEST_BUDGET.limit; i++) {
+        await service.login(REQUEST, `payer${i}@example.com`, undefined);
+      }
+
+      await expect(
+        service.login(REQUEST, 'one-more@example.com', undefined),
+      ).rejects.toBeInstanceOf(DirectLoginBudgetError);
+      expect(client.sendLoginCode).toHaveBeenCalledTimes(
+        P2P_DIRECT_LOGIN_REQUEST_BUDGET.limit,
+      );
+    });
+
+    it('counts nothing with rate limiting off', async () => {
+      const { service, budgets } = setup({ rateLimited: false });
+
+      await service.login(REQUEST, EMAIL, undefined);
+
+      expect(budgets.hit).not.toHaveBeenCalled();
     });
 
     it('refuses an email that is not one before asking the marketplace', async () => {
@@ -663,6 +780,96 @@ describe('P2pDirectService', () => {
       expect(request).toMatchObject({
         status: 'processing',
         processingSessionId: sessions[0].id,
+      });
+      // The order's due time has passed (2026-11-13): the deadline counts from now.
+      const until = (request.processingUntil as Date).getTime();
+      expect(until).toBeGreaterThan(
+        Date.now() + P2P_DIRECT_PROCESSING_GRACE_MS - 5_000,
+      );
+      expect(until).toBeLessThanOrEqual(
+        Date.now() + P2P_DIRECT_PROCESSING_GRACE_MS,
+      );
+    });
+
+    it('keeps the request processing until the order’s due time plus the grace period', async () => {
+      const { service, client, session, request } = setup();
+      const due = new Date(Date.now() + 20 * 60_000).toISOString();
+      client.order.mockResolvedValueOnce(
+        marketOrder('ACCEPTED', { dueDate: due }),
+      );
+      client.markOrderPaid.mockResolvedValueOnce(
+        marketOrder('FIAT_PAID', { dueDate: due }),
+      );
+
+      await service.markPaid(REQUEST, 'ord-1', session);
+
+      expect(request.processingUntil).toEqual(
+        new Date(Date.parse(due) + P2P_DIRECT_PROCESSING_GRACE_MS),
+      );
+    });
+
+    it('settles the request when a read finds the order completed, through the webhook’s checks', async () => {
+      const { service, client, session, request, sessions } = setup();
+      await service.createOrder(REQUEST, session, { accountId: 'pd-1' });
+      await service.markPaid(REQUEST, 'ord-1', session);
+      client.order.mockResolvedValue(marketOrder('COMPLETED', DELIVERED));
+
+      await expect(
+        service.order(REQUEST, 'ord-1', session),
+      ).resolves.toMatchObject({ status: 'completed' });
+
+      expect(sessions[0]).toMatchObject({
+        providerStatus: 'COMPLETED',
+        deliveredAmount: '9.95',
+        txHash: DELIVERED.transferInfo.txHash,
+      });
+      expect(request).toMatchObject({
+        status: 'paid',
+        paidMethod: 'p2p',
+        paidAmount: '9.95',
+        paidTxHash: DELIVERED.transferInfo.txHash,
+        paidSessionId: sessions[0].id,
+      });
+      const paidAt = request.paidAt;
+
+      // Read again (or the webhook arriving too): nothing changes.
+      await service.order(REQUEST, 'ord-1', session);
+      expect(request.paidAt).toBe(paidAt);
+    });
+
+    it('never settles on a completed read that does not pay the request', async () => {
+      const { service, client, session, request } = setup();
+      await service.createOrder(REQUEST, session, { accountId: 'pd-1' });
+      await service.markPaid(REQUEST, 'ord-1', session);
+      client.order.mockResolvedValueOnce(
+        marketOrder('COMPLETED', {
+          ...DELIVERED,
+          cryptoDetails: {
+            ...DELIVERED.cryptoDetails,
+            recipientAddress: '0x' + '1'.repeat(40),
+          },
+        }),
+      );
+
+      await service.order(REQUEST, 'ord-1', session);
+
+      expect(request).toMatchObject({ status: 'processing', paidAt: null });
+    });
+
+    it('reopens the request when a read finds the order that made it processing cancelled', async () => {
+      const { service, client, session, request } = setup();
+      await service.createOrder(REQUEST, session, { accountId: 'pd-1' });
+      await service.markPaid(REQUEST, 'ord-1', session);
+      client.order.mockResolvedValueOnce(marketOrder('CANCELLED'));
+
+      await expect(
+        service.order(REQUEST, 'ord-1', session),
+      ).resolves.toMatchObject({ status: 'cancelled' });
+
+      expect(request).toMatchObject({
+        status: 'open',
+        processingSessionId: null,
+        processingUntil: null,
       });
     });
 

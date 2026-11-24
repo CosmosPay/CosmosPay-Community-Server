@@ -1,6 +1,7 @@
 import { sealJson } from '@/common/sealed-box';
 import { P2P_DIRECT_SESSION_MAX_MS } from '@/native-plugins/eldorado/eldorado.constants';
 import {
+  loginEmailSubject,
   openPayerSession,
   sealPayerSession,
   sessionExpiry,
@@ -119,5 +120,31 @@ describe('the payer session', () => {
       NOW + P2P_DIRECT_SESSION_MAX_MS,
     );
     expect(sessionExpiry(NOW, null)).toBe(NOW + P2P_DIRECT_SESSION_MAX_MS);
+  });
+});
+
+describe('the sign-in budget of an email address', () => {
+  it('is counted under an HMAC of the address, one per inbox', () => {
+    const subject = loginEmailSubject('payer@example.com', SECRET);
+
+    expect(subject).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(subject).not.toContain('payer');
+    // Case and a `+tag` reach the same inbox: one budget.
+    for (const spelling of [
+      'Payer@Example.COM',
+      'payer+shop@example.com',
+      ' payer+a+b@example.com ',
+    ]) {
+      expect(loginEmailSubject(spelling, SECRET)).toBe(subject);
+    }
+    // Another inbox, or another deployment's secret, is another subject.
+    expect(loginEmailSubject('payer@example.org', SECRET)).not.toBe(subject);
+    expect(loginEmailSubject('payer2@example.com', SECRET)).not.toBe(subject);
+    expect(
+      loginEmailSubject(
+        'payer@example.com',
+        Buffer.alloc(32, 2).toString('base64'),
+      ),
+    ).not.toBe(subject);
   });
 });

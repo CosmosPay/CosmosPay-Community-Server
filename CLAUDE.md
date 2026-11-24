@@ -562,7 +562,8 @@ Each of these was a real finding in this codebase, not a hypothetical:
   platform + resolver key pair still drains every auto-policy payment), and the
   contract id a buyer pays into is derived from the deploy the platform signed,
   never read from Trustless Work's answer.
-- **A P2P payment request turns `paid` only on the marketplace's signed webhook.**
+- **A P2P payment request turns `paid` only on what the marketplace itself says: its
+  signed webhook, or its answer to this service's own read of a direct order.**
   `POST /v1/onramp/p2p/webhooks` (`@Public()`, out of the contract) checks
   `sha256(rawBody)` against `x-webhook-hash`, then the RSA signature of that hex
   against each network's JWKS (`P2pWebhookKeys`): the network whose key verifies is
@@ -589,7 +590,18 @@ Each of these was a real finding in this codebase, not a hypothetical:
   webhook finds a direct order's session by `providerOrderId` under its
   `paymentRequestId`; a CANCELLED order reopens its request only when
   `processingSessionId` names that session, and a bank transfer's `markProcessing`
-  clears the field, so money that arrived is never reopened.
+  clears the field, so money that arrived is never reopened. A read of a direct order
+  (through the payer's session, from the marketplace's API, never a value the payer
+  sent) that finds it COMPLETED or CANCELLED goes through the webhook's own
+  `P2pOrderEventsService.apply`, `completionProblem` included; never a second settle
+  path. Marking an order paid sets `processingUntil` (its due time plus
+  `P2P_DIRECT_PROCESSING_GRACE_MS`), and `P2pDirectProcessingSweepService` reopens a
+  request still `processing` past it: the order cannot be read without the payer's
+  token, which is never stored. The sign-in that emails a code is budgeted per email
+  address (an HMAC under a key derived from `P2P_DIRECT_SESSION_SECRET`,
+  `loginEmailSubject`) and per request through `RateLimitService`, beside the route's
+  per-client budget: an address budget alone let anyone rotating addresses mail one
+  inbox without end.
 - **A bank transfer moves a payment request only on the partner's signed webhook, and
   only to the transfer that deposit names** (native plugin `koywe`). `POST
   /v1/onramp/transfer/webhooks` checks `Koywe-Signature` (HMAC-SHA256 of the raw body)

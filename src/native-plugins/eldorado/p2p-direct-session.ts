@@ -1,6 +1,8 @@
+import { createHmac, hkdfSync } from 'node:crypto';
 import { openJson, sealJson } from '@/common/sealed-box';
 import type { StellarNetwork } from '@/config/configuration';
 import {
+  P2P_DIRECT_LOGIN_BUDGET_PURPOSE,
   P2P_DIRECT_SESSION_MAX_CHARS,
   P2P_DIRECT_SESSION_MAX_MS,
   P2P_DIRECT_SESSION_PURPOSE,
@@ -85,4 +87,26 @@ export function openPayerSession(
   }
   if (claims.e <= now) return null;
   return claims as PayerSessionClaims;
+}
+
+/**
+ * The subject the sign-in budget of one email address is counted under: an
+ * HMAC-SHA256 of the address under a key derived from the session secret, so
+ * the counter table holds neither the address nor a hash anyone could test
+ * addresses against. Case and a `+tag` in the local part are dropped first:
+ * they reach the same inbox, and must not each get a budget of their own.
+ */
+export function loginEmailSubject(email: string, secret: string): string {
+  const [local, domain] = splitAddress(email.trim().toLowerCase());
+  const key = Buffer.from(
+    hkdfSync('sha256', secret, '', P2P_DIRECT_LOGIN_BUDGET_PURPOSE, 32),
+  );
+  return createHmac('sha256', key)
+    .update(`${local.split('+')[0]}@${domain}`)
+    .digest('base64url');
+}
+
+function splitAddress(address: string): [string, string] {
+  const at = address.lastIndexOf('@');
+  return at < 0 ? [address, ''] : [address.slice(0, at), address.slice(at + 1)];
 }

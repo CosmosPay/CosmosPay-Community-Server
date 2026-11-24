@@ -9,6 +9,7 @@ import {
   Param,
   Post,
   Req,
+  Res,
 } from '@nestjs/common';
 import {
   ApiCreatedResponse,
@@ -18,11 +19,12 @@ import {
   ApiParam,
   ApiTags,
 } from '@nestjs/swagger';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 import { ApiErrorResponse } from '@/common/decorators/api-error-response.decorator';
 import { Public } from '@/common/decorators/public.decorator';
 import { RateLimit } from '@/common/decorators/rate-limit.decorator';
 import { ApiErrorCode } from '@/common/errors/api-error';
+import { RATE_LIMIT_HEADER } from '@/common/rate-limit.constants';
 import { headerValue } from '@/common/request-header';
 import {
   CreateDirectOrderDto,
@@ -47,6 +49,7 @@ import {
   DirectOrderEntity,
   DirectSessionEntity,
 } from '@/native-plugins/eldorado/entities/p2p-direct.entity';
+import { DirectLoginBudgetError } from '@/native-plugins/eldorado/p2p-direct';
 import { P2pDirectService } from '@/native-plugins/eldorado/p2p-direct.service';
 
 const ID = 'cmh4x2k9a0001l70g8v5q3z2w';
@@ -191,6 +194,7 @@ export class P2pDirectController {
     description:
       'For a request whose `p2pDirect` is true: emails the payer a code (in the language `Accept-Language` prefers among Spanish, English and Portuguese; Spanish by default) and answers the `challenge` to send back with it. ' +
       'A new email also opens the payer’s account. Nothing about the payer is stored. ' +
+      'Besides the per-client budget, each email address and each request take a limited number of codes (`429 rate_limited` with `Retry-After` past either). ' +
       '`400 invalid_email`, `400 method_unavailable` when the request cannot be paid this way, `409 request_closed` unless it is open.',
   })
   @IdParam()
@@ -202,12 +206,17 @@ export class P2pDirectController {
     @Param() params: P2pPaymentRequestParamsDto,
     @Body() dto: DirectLoginDto,
     @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
   ) {
-    return this.direct.login(
-      params.id,
-      dto.email,
-      headerValue(req, 'accept-language'),
-    );
+    return this.direct
+      .login(params.id, dto.email, headerValue(req, 'accept-language'))
+      .catch((err: unknown) => {
+        // The email's and the request's budgets answer like any budget: when to come back.
+        if (err instanceof DirectLoginBudgetError) {
+          res.setHeader(RATE_LIMIT_HEADER.retryAfter, err.retryAfterSeconds);
+        }
+        throw err;
+      });
   }
 
   @Post(':id/direct/login/verify')

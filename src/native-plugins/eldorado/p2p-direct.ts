@@ -12,6 +12,7 @@ import {
   P2P_DIRECT_LANGUAGES,
   P2P_DIRECT_PAYMENT_METHOD,
   P2P_DIRECT_PHONE_PREFIX,
+  P2P_DIRECT_PROCESSING_GRACE_MS,
   P2P_DIRECT_TRADING_LEVEL,
   P2P_DIRECT_USERNAME_PREFIX,
 } from '@/native-plugins/eldorado/eldorado.constants';
@@ -788,7 +789,38 @@ export const directErrors = {
       ApiErrorCode.RateLimited,
       'Too many attempts: wait a few minutes and try again.',
     ),
+  loginBudgetSpent: (retryAfterSeconds: number) =>
+    new DirectLoginBudgetError(retryAfterSeconds),
 };
+
+/**
+ * A sign-in past the budget of its email address or of its payment request:
+ * `429 rate_limited`, like any budget, with when to come back (the controller
+ * puts it in `Retry-After`). The message never says which budget, so it does
+ * not tell whether some address was asked for already.
+ */
+export class DirectLoginBudgetError extends ApiError {
+  constructor(readonly retryAfterSeconds: number) {
+    super(
+      HttpStatus.TOO_MANY_REQUESTS,
+      ApiErrorCode.RateLimited,
+      `Too many requests. Retry in ${retryAfterSeconds}s.`,
+    );
+  }
+}
+
+/**
+ * Until when a direct order whose payer said they transferred may keep its
+ * payment request `processing`: the order's due time (now, when it has none
+ * or it already passed) plus {@link P2P_DIRECT_PROCESSING_GRACE_MS}.
+ */
+export function processingDeadline(dueAt: string | null, at: Date): Date {
+  const due = dueAt ? Date.parse(dueAt) : Number.NaN;
+  const base = Number.isFinite(due)
+    ? Math.max(due, at.getTime())
+    : at.getTime();
+  return new Date(base + P2P_DIRECT_PROCESSING_GRACE_MS);
+}
 
 /**
  * What each step makes of a refusal before the shared rules: a code or status

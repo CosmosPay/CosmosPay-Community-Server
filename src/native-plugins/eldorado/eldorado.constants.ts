@@ -568,3 +568,49 @@ export const P2P_DIRECT_WRITE_RATE_LIMIT = {
   limit: 30,
   windowMs: 60 * 1000,
 };
+
+/**
+ * Sign-in codes mailed to ONE email address, from every client and every
+ * charge together. The per-address budget above does not stop a caller who
+ * rotates addresses (or charges) from mailing one inbox without end; five an
+ * hour is a payer asking again after a typo or a slow inbox. Counted under an
+ * HMAC of the address (`loginEmailSubject`), never the address.
+ */
+export const P2P_DIRECT_LOGIN_EMAIL_BUDGET = {
+  name: 'payment-links-fiat:direct-login-email',
+  limit: 5,
+  windowMs: 60 * 60 * 1000,
+};
+
+/**
+ * Sign-in codes started for ONE payment request, from every client together.
+ * A charge has one payer, so twenty in ten minutes is far beyond honest use,
+ * and spending it delays that charge's payer for minutes at most: a refilling
+ * budget, never a cap that locks the real payer out.
+ */
+export const P2P_DIRECT_LOGIN_REQUEST_BUDGET = {
+  name: 'payment-links-fiat:direct-login-request',
+  limit: 20,
+  windowMs: 10 * 60 * 1000,
+};
+
+/** HKDF purpose of the key the sign-in email budget's HMAC is computed under. */
+export const P2P_DIRECT_LOGIN_BUDGET_PURPOSE = 'p2p-direct-login-budget v1';
+
+/**
+ * How long past its order's due time a charge stays `processing` because its
+ * payer said they transferred, when the marketplace neither completes nor
+ * cancels that order. Transfers between Argentine accounts are instant and a
+ * seller normally confirms within the order's own window, so a day is a seller
+ * who checks once a day, not one who is late by minutes. Past it the charge is
+ * open again (`P2pDirectProcessingSweepService`): a payer who marks paid without
+ * paying no longer freezes it. A completion that still arrives later pays it
+ * whatever it reads as.
+ */
+export const P2P_DIRECT_PROCESSING_GRACE_MS = 24 * 60 * 60 * 1000;
+
+/** How often the sweep looks for charges past that deadline. */
+export const P2P_DIRECT_PROCESSING_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+
+/** Charges reopened per sweep cycle at most; the next cycle takes the rest. */
+export const P2P_DIRECT_PROCESSING_SWEEP_BATCH = 100;

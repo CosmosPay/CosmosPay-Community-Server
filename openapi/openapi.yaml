@@ -13014,9 +13014,11 @@ paths:
         (in the language `Accept-Language` prefers among Spanish, English and
         Portuguese; Spanish by default) and answers the `challenge` to send back
         with it. A new email also opens the payer’s account. Nothing about the
-        payer is stored. `400 invalid_email`, `400 method_unavailable` when the
-        request cannot be paid this way, `409 request_closed` unless it is
-        open."
+        payer is stored. Besides the per-client budget, each email address and
+        each request take a limited number of codes (`429 rate_limited` with
+        `Retry-After` past either). `400 invalid_email`, `400
+        method_unavailable` when the request cannot be paid this way, `409
+        request_closed` unless it is open."
       operationId: P2pDirectController_login_v1
       parameters:
         - name: id

@@ -2640,6 +2640,11 @@ model P2pPaymentRequest {
   // transferred); null when nothing did, or a bank transfer took over. When the
   // marketplace cancels THAT order, the request is open again.
   processingSessionId String?
+  // Until when that order may keep it `processing`: the order's due time plus a
+  // grace period. Past it, with the order neither completed nor cancelled, the
+  // sweep opens the request again (a payer who marks paid without paying no
+  // longer freezes it). Null whenever `processingSessionId` is.
+  processingUntil     DateTime?
 
   // The first completed payment that paid it: when this service learned it, the
   // token delivered (a decimal string), the delivering transaction, how it was
@@ -2658,6 +2663,7 @@ model P2pPaymentRequest {
   sessions P2pRampSession[]
 
   @@index([consumerId, network, createdAt])
+  @@index([status, processingUntil])
   @@map("p2p_payment_request")
 }
 

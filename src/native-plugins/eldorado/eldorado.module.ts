@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { EldoradoClient } from '@/native-plugins/eldorado/eldorado.client';
 import { P2pDirectController } from '@/native-plugins/eldorado/p2p-direct.controller';
+import { P2pDirectProcessingSweepService } from '@/native-plugins/eldorado/p2p-direct-processing-sweep.service';
 import { P2pDirectService } from '@/native-plugins/eldorado/p2p-direct.service';
 import { P2pOfframpController } from '@/native-plugins/eldorado/p2p-offramp.controller';
 import { P2pOnrampController } from '@/native-plugins/eldorado/p2p-onramp.controller';
@@ -47,6 +48,7 @@ import { PaymentRequestRailsModule } from '@/payment-request-rails/payment-reque
     P2pWebhookKeys,
     P2pOrderEventsService,
     P2pDirectService,
+    P2pDirectProcessingSweepService,
   ],
 })
 export class EldoradoModule {}
