@@ -57,7 +57,12 @@ describe('the payer session', () => {
   it('refuses a tampered, truncated, foreign or missing session', () => {
     const sealed = sealPayerSession(CLAIMS, SECRET);
     const [version, iv, tag, body] = sealed.split('.');
-    const flipped = `${body.slice(0, -2)}${body.endsWith('A') ? 'B' : 'A'}${body.slice(-1)}`;
+    // Replace the second-to-last character (every one of its bits is data, unlike
+    // the last one's) with a different one: decided on that character itself, so
+    // the mutation never writes back the same value.
+    const at = body.length - 2;
+    const flipped = `${body.slice(0, at)}${body[at] === 'A' ? 'B' : 'A'}${body.slice(at + 1)}`;
+    expect(flipped).not.toBe(body);
 
     for (const bad of [
       [version, iv, tag, flipped].join('.'),
