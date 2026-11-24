@@ -574,16 +574,29 @@ describe('Payment intents CRUD (e2e)', () => {
       );
     });
 
-    it('answers a production key with every network, in any asset', async () => {
+    it('answers a production key with every network, in any asset, but Arc without deposit addresses', async () => {
       const res = await gw(
         request(http()).get(networks).set('x-consumer-env', 'prod'),
       ).expect(200);
+      type Row = {
+        id: string;
+        available: boolean;
+        reason: string | null;
+        network: string;
+        asset: unknown;
+      };
+      const rows: Row[] = res.body.data;
       expect(
-        res.body.data.every(
-          (n: { available: boolean; network: string; asset: unknown }) =>
-            n.available && n.network === 'public' && n.asset === null,
-        ),
+        rows.every((n) => n.network === 'public' && n.asset === null),
       ).toBe(true);
+      // No ARC_RELAYER_PRIVATE_KEY here: Arc is the one network a link
+      // cannot be created on, and the catalog says why.
+      expect(rows.filter((n) => !n.available).map((n) => n.id)).toEqual([
+        'arc',
+      ]);
+      expect(rows.find((n) => n.id === 'arc')?.reason).toMatch(
+        /not available on this deployment/,
+      );
     });
   });
 
