@@ -266,18 +266,20 @@ describe('PaymentReceiptsService', () => {
     );
   });
 
-  it("goes to the session whose wallet account is the settlement's source", async () => {
-    const { service, mailer } = build({
+  it("never routes the receipt by the settlement's source account: an address is public", async () => {
+    const { service, mailer, customers } = build({
       sessions: [
-        session('other@example.com'),
-        session('payer@example.com', 'en', {
+        session('payer@example.com'),
+        // A stranger who registered the payer's known address ahead of time.
+        session('stranger@example.com', 'en', {
           walletAddress: '0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed',
           provenAt: at(3),
         }),
       ],
     });
-    await expect(service.send('pi_1')).resolves.toBe(true);
-    expect(mailer.send.mock.calls[0][0].to).toBe('payer@example.com');
+    await expect(service.send('pi_1')).resolves.toBe(false);
+    expect(mailer.send).not.toHaveBeenCalled();
+    expect(customers.linkPayerEmail).not.toHaveBeenCalled();
   });
 
   it('with two or more sessions and no proof matching, sends nothing and links no customer', async () => {

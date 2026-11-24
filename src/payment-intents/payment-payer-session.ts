@@ -62,12 +62,16 @@ function same(caseInsensitive: boolean, a: string, b: string): boolean {
  * Where the receipt of a payment made with the link itself (not a deposit)
  * goes, among the checkout sessions that gave an email. A `sent` report proves
  * nothing (anyone holding a token can send one), so only a proof decides: the
- * session whose registered transaction is the settlement's, else the one whose
- * registered account is the settlement's source. A proof counts only when
- * registered `PAYMENT_PAYER_PROOF_MARGIN_MS` before the transaction's on-chain
- * time (the hash and the source are public from then on), never when that time
- * is unknown, and two sessions matching the same proof prove nothing. Without exactly one match: the only session when exactly one gave
- * an email (a receipt of on-chain facts, no customer link); otherwise nobody.
+ * session whose registered transaction is the settlement's. A registered
+ * account proves nothing: an address is public long before it pays (every
+ * earlier payment shows it), so anyone could register a merchant's known payer
+ * on a link ahead of time and take that payer's receipt and customer link.
+ * A transaction hash exists only once its payer signs it. A proof counts only
+ * when registered `PAYMENT_PAYER_PROOF_MARGIN_MS` before the transaction's
+ * on-chain time (the hash is public from then on), never when that time is
+ * unknown, and two sessions matching the same proof prove nothing. Without
+ * exactly one match: the only session when exactly one gave an email (a
+ * receipt of on-chain facts, no customer link); otherwise nobody.
  */
 export function receiptRecipient<T extends PayerSessionFields>(
   sessions: readonly T[],
@@ -94,19 +98,7 @@ export function receiptRecipient<T extends PayerSessionFields>(
           (s) => s.walletTxHash !== null && same(true, s.walletTxHash, tx),
         )
       : [];
-    const source =
-      settled.source && rules.address.isValid(settled.source)
-        ? rules.address.normalize(settled.source)
-        : null;
-    const byAddress = source
-      ? inTime.filter(
-          (s) =>
-            s.walletAddress !== null &&
-            same(rules.address.caseInsensitive, s.walletAddress, source),
-        )
-      : [];
-    const matches = byTx.length > 0 ? byTx : byAddress;
-    if (matches.length === 1) return { session: matches[0], proven: true };
+    if (byTx.length === 1) return { session: byTx[0], proven: true };
   }
   return sessions.length === 1 ? { session: sessions[0], proven: false } : null;
 }
