@@ -32,13 +32,14 @@ const text = (value: unknown): string | null =>
  * Converts a matched deposit to the payment request's token and sends it to
  * the seller's address, under the merchant the deposit landed in: the seller's
  * CRYPTO account for that address (registered once), a quote for the whole
- * deposit, and an ONRAMP order whose `externalId` is the transfer's id (the
- * provider keeps one order per external id, so an attempt repeated after a
- * crash finds the first one instead of paying twice).
+ * deposit, and an ONRAMP order whose `externalId` is the transfer's id.
  *
- * An attempt holds the transfer for a few minutes (`nextAttemptAt`, a
- * conditional write), so the webhook's attempt and the sweep's never run at
- * once. A failure, or an approval policy that holds the order or the account,
+ * An attempt holds the transfer for a few minutes and counts itself before it
+ * reaches the provider (`nextAttemptAt` and `attempts`, one compare-and-swap),
+ * so the webhook's attempt and the sweep's never run at once. Every attempt
+ * asks the provider for the order of that external id before it quotes: one
+ * that died after the provider created the order, but before `providerOrderId`
+ * was written, is found by the next instead of ordering the deposit twice. A failure, or an approval policy that holds the order or the account,
  * keeps the transfer `converting` with the provider's status and a short
  * reason, logs an error and leaves it to the sweep, which retries a minute
  * later, doubling to an hour.
@@ -74,14 +75,21 @@ export class BankTransferConversion {
       return;
     }
     const now = new Date();
+    // The claim is the attempt's count: written before the provider is called,
+    // so a crash anywhere after it leaves the attempt on the row.
+    const attempt = transfer.attempts + 1;
     const claimed = await this.prisma.bankTransfer.updateMany({
       where: {
         id: transfer.id,
         status: 'converting',
         providerOrderId: null,
+        attempts: transfer.attempts,
         OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now } }],
       },
-      data: { nextAttemptAt: new Date(now.getTime() + BANK_TRANSFER_CLAIM_MS) },
+      data: {
+        attempts: attempt,
+        nextAttemptAt: new Date(now.getTime() + BANK_TRANSFER_CLAIM_MS),
+      },
     });
     if (claimed.count === 0) return;
 
@@ -104,15 +112,14 @@ export class BankTransferConversion {
         );
       }
 
-      // An attempt that died after ordering left the order behind.
-      let raw =
-        transfer.attempts > 0
-          ? await this.client.orderByExternalId(
-              network,
-              merchantId,
-              transfer.id,
-            )
-          : null;
+      // Never a second order for one deposit: an attempt that died after the
+      // provider created the order, before its id was written here, left it
+      // behind under this external id.
+      let raw = await this.client.orderByExternalId(
+        network,
+        merchantId,
+        transfer.id,
+      );
       let quoteId: string | null = null;
       if (!raw) {
         const accountId = await this.accounts.accountFor(
@@ -149,7 +156,6 @@ export class BankTransferConversion {
           ...(quoteId ? { providerQuoteId: quoteId } : {}),
           providerStatus: order.status,
           reason: hold,
-          attempts: transfer.attempts + 1,
           nextAttemptAt: null,
           checkedAt: now,
         },
@@ -183,14 +189,13 @@ export class BankTransferConversion {
       await this.prisma.bankTransfer.updateMany({
         where: { id: transfer.id, status: 'converting', providerOrderId: null },
         data: {
-          attempts: transfer.attempts + 1,
           nextAttemptAt: new Date(now.getTime() + delay),
           reason,
           ...(onHold ? { providerStatus: error.providerStatus } : {}),
         },
       });
       this.logger.error(
-        `Bank transfer ${transfer.id} (${network}) could not be converted by ${KOYWE_PROVIDER} (attempt ${transfer.attempts + 1}, next in ${Math.round(delay / 1000)} s): ${reason}`,
+        `Bank transfer ${transfer.id} (${network}) could not be converted by ${KOYWE_PROVIDER} (attempt ${attempt}, next in ${Math.round(delay / 1000)} s): ${reason}`,
       );
     }
   }

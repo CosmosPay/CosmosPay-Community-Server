@@ -247,6 +247,64 @@ describe('BankTransferConversion', () => {
     expect(transfer).toMatchObject({ providerOrderId: 'ord_1', attempts: 2 });
   });
 
+  it('never orders a deposit twice when an attempt died after the provider created the order', async () => {
+    const { db, client, service, transfer } = setup();
+    // The process dies between the provider's answer and the write of its id:
+    // that write never lands, and nothing after it runs.
+    const write = db.bankTransfer.updateMany.getMockImplementation()!;
+    db.bankTransfer.updateMany.mockImplementation((args) =>
+      'providerOrderId' in args.data
+        ? new Promise<never>(() => undefined)
+        : write(args),
+    );
+    void service.convert('btr1');
+    for (let i = 0; i < 50 && client.createOrder.mock.calls.length === 0; i++) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    expect(client.createOrder).toHaveBeenCalledTimes(1);
+    // The claim counted the attempt before anything reached the provider.
+    expect(transfer).toMatchObject({ providerOrderId: null, attempts: 1 });
+    db.bankTransfer.updateMany.mockImplementation(write);
+
+    // The claim lapses and the sweep takes the transfer again: the provider
+    // holds the first order under the transfer's id.
+    transfer.nextAttemptAt = new Date(Date.now() - 1000);
+    client.orderByExternalId.mockResolvedValueOnce({
+      id: 'ord_1',
+      status: 'PROCESSING',
+    } as never);
+    await service.convert('btr1');
+
+    expect(client.orderByExternalId).toHaveBeenLastCalledWith(
+      'public',
+      'mrc_seller',
+      'btr1',
+    );
+    expect(client.quote).toHaveBeenCalledTimes(1);
+    expect(client.createOrder).toHaveBeenCalledTimes(1);
+    expect(transfer).toMatchObject({
+      providerOrderId: 'ord_1',
+      providerStatus: 'PROCESSING',
+      attempts: 2,
+      nextAttemptAt: null,
+    });
+  });
+
+  it('asks the provider for the order of the transfer before the first quote too', async () => {
+    const { client, service } = setup();
+
+    await service.convert('btr1');
+
+    expect(client.orderByExternalId).toHaveBeenCalledWith(
+      'public',
+      'mrc_seller',
+      'btr1',
+    );
+    expect(client.orderByExternalId.mock.invocationCallOrder[0]).toBeLessThan(
+      client.quote.mock.invocationCallOrder[0],
+    );
+  });
+
   it('never runs two attempts at once', async () => {
     const { client, service } = setup();
 
