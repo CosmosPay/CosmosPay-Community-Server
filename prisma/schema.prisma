@@ -2620,8 +2620,9 @@ model P2pPaymentRequest {
 
   // The ways it could be paid when it was created, in the order the page offers
   // them: `transfer` (a bank transfer) and `p2p` (the marketplace's widget).
-  // Reads ask each rail again; this is what creation decided.
-  methods String[] @default([])
+  // Reads ask each rail again; this is what creation decided. The default is
+  // what the build before this column created (P2P only), for its writes.
+  methods String[] @default(["p2p"])
 
   // `open`, `processing`, `paid` or `cancelled`. `processing`: a bank transfer
   // for it arrived and the token is on its way (it never reads as expired and
