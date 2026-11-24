@@ -391,11 +391,27 @@ describe('validateEnv', () => {
         'KOYWE_DOCUMENT_PEPPER',
         'KOYWE_ALIAS',
         'KOYWE_CVU',
+        'KOYWE_MIN_ARS',
+        'KOYWE_MAX_ARS',
       ].map((name) => [name, '']),
     );
 
     it('reads an empty value as an unset one, as .env.example leaves them', () => {
       expect(() => validateEnv(validEnv(EMPTY))).not.toThrow();
+    });
+
+    it('reads a blank amount bound as unset, not as 0, with the plugin off', () => {
+      for (const value of ['', '  ']) {
+        expect(() =>
+          validateEnv(
+            validEnv({
+              PLUGINS_ENABLED: '',
+              KOYWE_MIN_ARS: value,
+              KOYWE_MAX_ARS: value,
+            }),
+          ),
+        ).not.toThrow();
+      }
     });
 
     it('accepts a whole set', () => {
@@ -435,6 +451,44 @@ describe('validateEnv', () => {
       ]) {
         expectEnvError(validEnv({ [name]: value }), name);
       }
+    });
+  });
+
+  describe('sandbox settlement', () => {
+    const KEY = '0x' + '5a'.repeat(32);
+
+    it('accepts a seed, a treasury key and per-network maps', () => {
+      expect(() =>
+        validateEnv(
+          validEnv({
+            SANDBOX_DEPOSIT_SEED: 'ab'.repeat(32),
+            SANDBOX_TREASURY_PRIVATE_KEY: KEY,
+            SANDBOX_RPC_URLS: 'eth=https://rpc.example',
+            SANDBOX_CUSD_ADDRESSES: 'bsc=0x' + 'c'.repeat(40),
+          }),
+        ),
+      ).not.toThrow();
+    });
+
+    it('refuses a short seed and a malformed key', () => {
+      expectEnvError(
+        validEnv({ SANDBOX_DEPOSIT_SEED: 'abcd' }),
+        'SANDBOX_DEPOSIT_SEED',
+      );
+      expectEnvError(
+        validEnv({ SANDBOX_TREASURY_PRIVATE_KEY: '0x1234' }),
+        'SANDBOX_TREASURY_PRIVATE_KEY',
+      );
+    });
+
+    it('refuses the mainnet relayer key as the sandbox treasury', () => {
+      expectEnvError(
+        validEnv({
+          SANDBOX_TREASURY_PRIVATE_KEY: KEY,
+          MONAD_RELAYER_PRIVATE_KEY: KEY.slice(2).toUpperCase(),
+        }),
+        'must not be MONAD_RELAYER_PRIVATE_KEY',
+      );
     });
   });
 });

@@ -31,7 +31,13 @@ export interface NearIntentsAppFee {
 /** `POST /v0/quote` body — the subset of options this service sets. */
 export interface NearIntentsQuoteRequest {
   dry: boolean;
-  swapType: 'EXACT_INPUT';
+  /**
+   * `EXACT_INPUT`: `amount` is what the payer deposits (cross-chain swaps).
+   * `EXACT_OUTPUT`: `amount` is what the recipient receives, and the quote's
+   * `amountIn` what to deposit, with the slippage buffer in it; any surplus
+   * is refunded (payments from any network, which must pay a link exactly).
+   */
+  swapType: 'EXACT_INPUT' | 'EXACT_OUTPUT';
   depositMode: 'SIMPLE' | 'MEMO';
   slippageTolerance: number;
   originAsset: string;

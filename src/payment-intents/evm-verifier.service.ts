@@ -111,6 +111,7 @@ export class EvmVerifierService implements PaymentVerifier {
       valid: true,
       txHash: hash.toLowerCase(),
       payer: toChecksumAddress(tx.from),
+      paidAt: new Date(timestamp * 1000),
     };
   }
 
@@ -168,11 +169,17 @@ export class EvmVerifierService implements PaymentVerifier {
         (log) => !log.removed && safeBigInt(log.data) === expected,
       );
       if (match) {
+        // The block's time, one read on a match: without it no session's proof
+        // counts for the receipt.
+        const timestamp = await this.rpc
+          .blockTimestamp(this.chain, network, match.blockNumber)
+          .catch(() => null);
         return {
           valid: true,
           txHash: match.transactionHash.toLowerCase(),
           payer: toChecksumAddress(topicAddress(match.topics[1] ?? '')),
           nextCursor: toBlock.toString(),
+          ...(timestamp !== null ? { paidAt: new Date(timestamp * 1000) } : {}),
         };
       }
       cursor = toBlock;

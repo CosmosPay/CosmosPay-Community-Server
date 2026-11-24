@@ -72,6 +72,14 @@ export class CustomerEntity {
   email!: string | null;
 
   @ApiProperty({
+    example: false,
+    description:
+      'True when `email` was typed by a payer in the hosted checkout to get a ' +
+      'receipt: not verified. False when you set it, or there is none.',
+  })
+  emailProvidedByPayer!: boolean;
+
+  @ApiProperty({
     type: [CustomerWalletEntity],
     description:
       'The customer\x27s wallets, oldest first, on any chain payments settle on.',

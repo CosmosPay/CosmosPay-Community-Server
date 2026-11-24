@@ -8,11 +8,14 @@
 -- `status` gains the value `processing` (a bank transfer arrived, the token is on
 -- its way): a TEXT column, so nothing changes in the schema for it.
 --
--- New tables and nullable or defaulted columns only. The two UPDATEs fill the new
--- columns of existing requests with what they were: every one was created for
--- the P2P marketplace alone, and every paid one was paid through it.
+-- New tables and nullable or defaulted columns only. `methods` defaults to
+-- `{p2p}`: a request the previous build creates between this migration and the
+-- restart onto the new one is a P2P marketplace request, and an empty list would
+-- read as one nobody can pay. The two UPDATEs fill the new columns of existing
+-- requests with what they were: every one was created for the P2P marketplace
+-- alone, and every paid one was paid through it.
 -- AlterTable
-ALTER TABLE "p2p_payment_request" ADD COLUMN     "methods" TEXT[] DEFAULT ARRAY[]::TEXT[],
+ALTER TABLE "p2p_payment_request" ADD COLUMN     "methods" TEXT[] DEFAULT ARRAY['p2p']::TEXT[],
 ADD COLUMN     "paidMethod" TEXT;
 
 -- CreateTable

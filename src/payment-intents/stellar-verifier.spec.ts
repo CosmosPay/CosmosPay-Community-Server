@@ -343,7 +343,12 @@ describe('StellarVerifierService.findMatchingPayment', () => {
       [paymentAt('h_new', 5_000, { successful: true, memo: '123456789' })],
     ]);
     const res = await make().findMatchingPayment(intent);
-    expect(res).toEqual({ valid: true, txHash: 'h_new', payer: 'GPAYER' });
+    expect(res).toEqual({
+      valid: true,
+      txHash: 'h_new',
+      payer: 'GPAYER',
+      paidAt: expect.any(Date),
+    });
   });
 
   it('does not settle on a matching payment whose transaction failed', async () => {
@@ -411,7 +416,12 @@ describe('StellarVerifierService.findMatchingPayment', () => {
 
     const res = await make().findMatchingPayment(intent);
 
-    expect(res).toEqual({ valid: true, txHash: 'h_real', payer: 'GPAYER' });
+    expect(res).toEqual({
+      valid: true,
+      txHash: 'h_real',
+      payer: 'GPAYER',
+      paidAt: expect.any(Date),
+    });
     expect(next).toHaveBeenCalledTimes(1);
   });
 
@@ -579,7 +589,12 @@ describe('StellarVerifierService with a merchant fee', () => {
 
     const res = await make().findMatchingPayment(intent);
 
-    expect(res).toEqual({ valid: true, txHash: 'h_fee', payer: 'GPAYER' });
+    expect(res).toEqual({
+      valid: true,
+      txHash: 'h_fee',
+      payer: 'GPAYER',
+      paidAt: expect.any(Date),
+    });
     expect(forTransaction).toHaveBeenCalledWith('h_fee');
   });
 });

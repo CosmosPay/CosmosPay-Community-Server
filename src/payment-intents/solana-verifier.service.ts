@@ -144,7 +144,14 @@ export class SolanaVerifierService implements PaymentVerifier {
     }
 
     const payer = keys.find((k) => k.signer)?.pubkey;
-    return { valid: true, txHash: signature, payer };
+    return {
+      valid: true,
+      txHash: signature,
+      payer,
+      ...(tx.blockTime !== null
+        ? { paidAt: new Date(tx.blockTime * 1000) }
+        : {}),
+    };
   }
 
   /**

@@ -8,6 +8,7 @@ import request from 'supertest';
 import { AppModule } from '@/app.module';
 import { AllExceptionsFilter } from '@/common/filters/all-exceptions.filter';
 import {
+  PAYMENT_DEPOSIT_ASSETS_RATE_LIMIT,
   PAYMENT_LINK_READ_RATE_LIMIT,
   PAYMENT_LINK_TRANSACTION_RATE_LIMIT,
 } from '@/payment-intents/payment-intents.constants';
@@ -90,6 +91,38 @@ describe('Payment links (e2e)', () => {
         updatedAt: new Date('2026-10-24T12:35:56.000Z'),
       },
     ],
+    [
+      'cmh4x2k9a0003l70gbaseusdc0',
+      {
+        id: 'cmh4x2k9a0003l70gbaseusdc0',
+        consumerId: 'consumer_secret_id',
+        kind: 'PAY',
+        chain: 'base',
+        network: 'public',
+        status: 'PENDING',
+        source: null,
+        destination: EVM_MERCHANT,
+        chainReference: null,
+        amount: '25',
+        asset: 'USDC',
+        assetIssuer: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',
+        assetDecimals: 6,
+        memo: '43',
+        msg: null,
+        callback: null,
+        xdr: null,
+        uri: 'https://payments.cosmospay.lat/cmh4x2k9a0003l70gbaseusdc0',
+        txHash: null,
+        reference: null,
+        checkoutTheme: null,
+        networkFee: null,
+        merchantFee: null,
+        crossChainFeeBps: 50,
+        expiresAt: new Date(Date.now() + 3_600_000),
+        createdAt: new Date('2026-10-24T12:34:56.000Z'),
+        updatedAt: new Date('2026-10-24T12:34:56.000Z'),
+      },
+    ],
   ]);
 
   const rateLimitCounters = new Map<string, number>();
@@ -102,6 +135,14 @@ describe('Payment links (e2e)', () => {
     consumer: { upsert: jest.fn() },
     requestLog: { create: jest.fn().mockResolvedValue({ id: 'rl_1' }) },
     webhookEndpoint: { findMany: jest.fn().mockResolvedValue([]) },
+    paymentDeposit: {
+      findFirst: jest.fn().mockResolvedValue(null),
+      findMany: jest.fn().mockResolvedValue([]),
+    },
+    paymentPayerSession: {
+      create: jest.fn(({ data }: any) => Promise.resolve(data)),
+      updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+    },
     /** The rate limiter's counter, keyed by bucket (window arithmetic is the service spec's). */
     $queryRaw: jest.fn((_sql: unknown, key: string) => {
       const next = (rateLimitCounters.get(key) ?? 0) + 1;
@@ -177,6 +218,7 @@ describe('Payment links (e2e)', () => {
       networkFee: null,
       merchantFee: null,
       payerAccountRequired: false,
+      crossChainPayment: false,
       expiresAt: '2026-10-24T13:34:56.000Z',
       createdAt: '2026-10-24T12:34:56.000Z',
       checkoutTheme: 'classic',
@@ -208,6 +250,22 @@ describe('Payment links (e2e)', () => {
       checkoutTheme: 'ticket',
     });
     expect(JSON.stringify(res.body)).not.toContain(EVM_MERCHANT);
+  });
+
+  it('has no address to pay on a network paid through deposit addresses', async () => {
+    const res = await request(http())
+      .get('/v1/payment-links/cmh4x2k9a0003l70gbaseusdc0')
+      .expect(200);
+
+    expect(res.body).toMatchObject({
+      chain: 'base',
+      payTo: null,
+      crossChainPayment: true,
+      asset: 'USDC',
+      uri: 'https://payments.cosmospay.lat/cmh4x2k9a0003l70gbaseusdc0',
+    });
+    expect(JSON.stringify(res.body)).not.toContain(EVM_MERCHANT);
+    expect(res.body).not.toHaveProperty('crossChainFeeBps');
   });
 
   it('is never cached, and reports its budget', async () => {
@@ -322,6 +380,138 @@ describe('Payment links (e2e)', () => {
       const res = await request(http())
         .post('/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/solana-pay')
         .send({ account: 'not-an-account' })
+        .expect(400);
+      expect(res.body.code).toBe('validation_failed');
+      expect(prismaMock.paymentIntent.findUnique).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('payments from any network (deposit-assets, quote, deposits)', () => {
+    const REFUND = 'TLsV52sRDL79HXGGm9yzwKibb6BeruhUzy';
+
+    it('lists assets with no key, on its own per-address budget, for a payable link only', async () => {
+      const res = await request(http())
+        .get('/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/deposit-assets')
+        .set('x-consumer-username', 'cosmos_u1')
+        .expect(400);
+
+      expect(res.body).toMatchObject({
+        code: 'validation_failed',
+        message:
+          'This payment link cannot be paid from another network: it is a transaction for one known payer.',
+      });
+      expect(res.headers['cache-control']).toBe('no-store');
+      expect(res.headers['ratelimit-limit']).toBe(
+        String(PAYMENT_DEPOSIT_ASSETS_RATE_LIMIT.limit),
+      );
+      expect(prismaMock.consumer.upsert).not.toHaveBeenCalled();
+      const [[, key]] = prismaMock.$queryRaw.mock.calls as [unknown, string][];
+      expect(key).toMatch(/^payment-links:deposit-assets:anonymous:/);
+    });
+
+    it('answers an unknown link as not found, for the quote and the deposit', async () => {
+      for (const path of ['quote', 'deposits']) {
+        const res = await request(http())
+          .post(`/v1/payment-links/cmh4x2k9a0009l70gneverwas/${path}`)
+          .send({
+            originChain: 'tron',
+            originAsset: 'USDT',
+            refundTo: REFUND,
+            // A deposit also takes its checkout session; a quote does not.
+            ...(path === 'deposits'
+              ? { payerToken: 'q8V0n3cJxZr2m1bWk7yTt4uP9aLs6dEf0gHiJkLmNoQ' }
+              : {}),
+          })
+          .expect(404);
+        expect(res.body.code).toBe('not_found');
+      }
+    });
+
+    it('refuses a refund address of another network before reading the link', async () => {
+      const res = await request(http())
+        .post('/v1/payment-links/cmh4x2k9a0003l70gbaseusdc0/quote')
+        .send({
+          originChain: 'tron',
+          originAsset: 'USDT',
+          refundTo: EVM_MERCHANT,
+        })
+        .expect(400);
+      expect(res.body.code).toBe('validation_failed');
+      expect(prismaMock.paymentIntent.findUnique).not.toHaveBeenCalled();
+    });
+
+    it('refuses a link that cannot be paid from another network, naming why', async () => {
+      const res = await request(http())
+        .post('/v1/payment-links/cmh4x2k9a0002l70gmonaddep/deposits')
+        .send({ originChain: 'tron', originAsset: 'USDT', refundTo: REFUND })
+        .expect(400);
+      expect(res.body.code).toBe('validation_failed');
+      const keys = prismaMock.$queryRaw.mock.calls.map(
+        ([, key]: [unknown, string]) => key,
+      );
+      expect(keys[0]).toMatch(/^payment-links:deposits:anonymous:/);
+    });
+
+    it('reads a deposit only through its own link, with no key', async () => {
+      const res = await request(http())
+        .get(
+          '/v1/payment-links/cmh4x2k9a0003l70gbaseusdc0/deposits/cm3dep0s1t0001l70g8v5q3z2w',
+        )
+        .expect(404);
+      expect(res.body.code).toBe('not_found');
+      expect(res.headers['cache-control']).toBe('no-store');
+      expect(prismaMock.paymentDeposit.findFirst).toHaveBeenCalledWith({
+        where: {
+          id: 'cm3dep0s1t0001l70g8v5q3z2w',
+          intentId: 'cmh4x2k9a0003l70gbaseusdc0',
+        },
+      });
+      const [[, key]] = prismaMock.$queryRaw.mock.calls as [unknown, string][];
+      expect(key).toMatch(/^payment-links:deposit-read:anonymous:/);
+    });
+  });
+
+  describe("POST /v1/payment-links/{id}/payer (the payer's email for the receipt)", () => {
+    it('is reachable with no key, on its own per-address budget, and opens a session on an open link', async () => {
+      prismaMock.paymentPayerSession.create.mockClear();
+      const res = await request(http())
+        .post('/v1/payment-links/cmh4x2k9a0003l70gbaseusdc0/payer')
+        .set('x-consumer-username', 'cosmos_u1')
+        .send({ email: 'payer@example.com', lang: 'es' })
+        .expect(200);
+      expect(res.body.payerToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(res.headers['cache-control']).toBe('no-store');
+      // Only the token's hash is stored.
+      const [[{ data }]] = prismaMock.paymentPayerSession.create.mock.calls;
+      expect(data.tokenHash).toMatch(/^[0-9a-f]{64}$/);
+      expect(JSON.stringify(data)).not.toContain(res.body.payerToken);
+      expect(prismaMock.consumer.upsert).not.toHaveBeenCalled();
+      const [[, key]] = prismaMock.$queryRaw.mock.calls as [unknown, string][];
+      expect(key).toMatch(/^payment-links:payer:anonymous:/);
+    });
+
+    it('refuses what is not an email, or not a session token, before reading anything', async () => {
+      for (const body of [
+        { email: 'not an email' },
+        { email: 'payer@example.com', payerToken: 'short' },
+      ]) {
+        const res = await request(http())
+          .post('/v1/payment-links/cmh4x2k9a0003l70gbaseusdc0/payer')
+          .send(body)
+          .expect(400);
+        expect(res.body.code).toBe('validation_failed');
+      }
+      expect(prismaMock.paymentIntent.findUnique).not.toHaveBeenCalled();
+    });
+
+    it('refuses a deposit without its checkout session', async () => {
+      const res = await request(http())
+        .post('/v1/payment-links/cmh4x2k9a0003l70gbaseusdc0/deposits')
+        .send({
+          originChain: 'tron',
+          originAsset: 'USDT',
+          refundTo: 'TLsV52sRDL79HXGGm9yzwKibb6BeruhUzy',
+        })
         .expect(400);
       expect(res.body.code).toBe('validation_failed');
       expect(prismaMock.paymentIntent.findUnique).not.toHaveBeenCalled();

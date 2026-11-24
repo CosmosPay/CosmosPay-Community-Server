@@ -323,12 +323,12 @@ describe('Bank transfers (e2e)', () => {
       });
     });
 
-    it('answers the instructions with no API key: 201, then 200 for the same document', async () => {
+    it('answers the instructions with no API key, 200 whether the document asked before or not', async () => {
       const path = `/v1/payment-links/fiat/${id}/transfers`;
       const first = await request(http())
         .post(path)
         .send({ document: '20-12345678-6' })
-        .expect(201);
+        .expect(200);
 
       expect(first.headers['cache-control']).toBe('no-store');
       expect(first.body).toEqual({

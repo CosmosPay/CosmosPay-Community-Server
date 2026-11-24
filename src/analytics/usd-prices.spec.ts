@@ -91,7 +91,7 @@ const TOKENS: NearIntentsToken[] = [
     contractAddress: 'Zero1111111111111111111111111111111111111111',
     price: 0,
   },
-  // On a network the payments never settle on.
+  // On a network payment links settle on through deposit addresses.
   {
     assetId: 'nep141:usdc-eth',
     blockchain: 'eth',
@@ -177,6 +177,17 @@ describe('usdPricer', () => {
     );
   });
 
+  it('prices a link settled on any network payment links reach, by its contract', () => {
+    expect(
+      mainnet({
+        chain: 'eth',
+        asset: 'USDC',
+        issuer: '0xA0b86991c6218b36c1d19d4a2e9eb0ce3606eB48',
+      }),
+    ).toBe(1);
+    expect(mainnet({ chain: 'eth', asset: 'USDC', issuer: null })).toBe(1);
+  });
+
   it('prices nothing it would have to guess', () => {
     // Two EURC listed on Stellar.
     expect(
@@ -201,8 +212,8 @@ describe('usdPricer', () => {
         issuer: 'Zero1111111111111111111111111111111111111111',
       }),
     ).toBeNull();
-    // Not a chain payments settle on, and a chain with nothing listed.
-    expect(mainnet({ chain: 'eth', asset: 'USDC', issuer: null })).toBeNull();
+    // Not a network payments settle on, and a chain with nothing listed.
+    expect(mainnet({ chain: 'qtc', asset: 'USDC', issuer: null })).toBeNull();
     expect(
       usdPricer([], 'public')({ chain: 'stellar', asset: 'XLM', issuer: null }),
     ).toBeNull();

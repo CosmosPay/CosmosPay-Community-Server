@@ -22,6 +22,7 @@ import {
   DEFAULT_MONAD_RPC,
   DEFAULT_NEAR_INTENTS_BASE_URL,
   DEFAULT_NEAR_INTENTS_TIMEOUT_MS,
+  DEFAULT_SANDBOX_RPC_TIMEOUT_MS,
   DEFAULT_PAYMENT_LINK_CHECKOUT_URL,
   DEFAULT_RATE_LIMIT_PRUNE_INTERVAL_MS,
   DEFAULT_RECOVERY_SWEEP_INTERVAL_MS,
@@ -57,6 +58,12 @@ import {
   type RedirectUrlWhitelist,
 } from '@/config/kyc-redirect-url-whitelist';
 import { type EvmTokenFees, parseEvmTokenFees } from '@/config/evm-token-fees';
+import {
+  isEvmAddressValue,
+  isRpcUrl,
+  parseNetworkMap,
+} from '@/config/sandbox-env';
+import type { PaymentNetwork } from '@/payment-intents/payment-networks';
 import {
   isNativePluginSlug,
   type NativePluginSlug,
@@ -401,6 +408,22 @@ export interface AppConfig {
      * figures, the asset list) does not wait for 1Click. Off in the e2e suites.
      */
     prefetchTokens: boolean;
+  };
+  /**
+   * Sandbox settlement: payment links on the networks paid through deposit
+   * addresses, on their TEST networks (`src/sandbox-settlement/`). Off (every
+   * such network unavailable in the sandbox) until both secrets are set.
+   */
+  sandbox: {
+    /** BIP-32 seed (hex) every sandbox deposit address is derived from. */
+    depositSeed: string;
+    /** The treasury's secp256k1 key (0x + 64 hex): pays merchants on test networks. */
+    treasuryPrivateKey: string;
+    /** RPC overrides per network (`SANDBOX_RPC_URLS`); the rest use the defaults. */
+    rpcUrls: Partial<Record<PaymentNetwork, string>>;
+    /** Where cUSD is deployed, per network (`SANDBOX_CUSD_ADDRESSES`). */
+    cusdAddresses: Partial<Record<PaymentNetwork, string>>;
+    timeoutMs: number;
   };
   /** The dashboard's analytics reads. */
   analytics: {
@@ -1108,6 +1131,25 @@ export default (): AppConfig => ({
     prefetchTokens:
       (process.env.NEAR_INTENTS_TOKENS_PREFETCH ?? 'true').toLowerCase() !==
       'false',
+  },
+  sandbox: {
+    depositSeed: process.env.SANDBOX_DEPOSIT_SEED?.trim() ?? '',
+    treasuryPrivateKey: process.env.SANDBOX_TREASURY_PRIVATE_KEY?.trim() ?? '',
+    rpcUrls: parseNetworkMap(
+      process.env.SANDBOX_RPC_URLS,
+      'SANDBOX_RPC_URLS',
+      isRpcUrl,
+    ),
+    cusdAddresses: parseNetworkMap(
+      process.env.SANDBOX_CUSD_ADDRESSES,
+      'SANDBOX_CUSD_ADDRESSES',
+      isEvmAddressValue,
+    ),
+    timeoutMs: parseInt(
+      process.env.SANDBOX_RPC_TIMEOUT_MS ??
+        String(DEFAULT_SANDBOX_RPC_TIMEOUT_MS),
+      10,
+    ),
   },
   analytics: {
     cacheTtlMs: parseInt(

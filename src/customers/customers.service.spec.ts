@@ -576,3 +576,62 @@ describe('CustomersService.ensureForPayer', () => {
     );
   });
 });
+
+describe('CustomersService.linkPayerEmail', () => {
+  it('creates a customer from the email a payer typed, marked as given by the payer', async () => {
+    const { service, prisma } = build();
+    prisma.customer.findFirst.mockResolvedValueOnce(null);
+
+    await service.linkPayerEmail('c1', 'payer@example.com');
+
+    expect(prisma.customer.findFirst).toHaveBeenCalledWith({
+      where: {
+        consumerId: 'c1',
+        email: { equals: 'payer@example.com', mode: 'insensitive' },
+        emailProvidedByPayer: true,
+      },
+      select: { id: true },
+    });
+    expect(prisma.customer.create).toHaveBeenCalledWith({
+      data: {
+        consumerId: 'c1',
+        name: 'payer@example.com',
+        email: 'payer@example.com',
+        emailProvidedByPayer: true,
+        reference: 'auto',
+      },
+    });
+  });
+
+  it('reuses a customer made from payer input with that email', async () => {
+    const { service, prisma } = build();
+    prisma.customer.findFirst.mockResolvedValueOnce({ id: 'cus_1' } as never);
+    await service.linkPayerEmail('c1', 'Payer@Example.com');
+    expect(prisma.customer.create).not.toHaveBeenCalled();
+  });
+
+  it("never merges into a customer the merchant created with that email: a new one, marked as the payer's", async () => {
+    const { service, prisma } = build();
+    // The merchant's own customer, verified by them, holds the same email.
+    const merchants = [
+      {
+        id: 'cus_merchant',
+        email: 'payer@example.com',
+        emailProvidedByPayer: false,
+      },
+    ];
+    prisma.customer.findFirst.mockImplementationOnce((({ where }: any) =>
+      Promise.resolve(
+        merchants.find(
+          (c) =>
+            c.email === where.email.equals.toLowerCase() &&
+            c.emailProvidedByPayer === where.emailProvidedByPayer,
+        ) ?? null,
+      )) as never);
+    await service.linkPayerEmail('c1', 'payer@example.com');
+    expect(prisma.customer.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ emailProvidedByPayer: true }),
+    });
+    expect(prisma.customer.update).not.toHaveBeenCalled();
+  });
+});

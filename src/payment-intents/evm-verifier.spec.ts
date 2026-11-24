@@ -100,6 +100,7 @@ describe('EvmVerifierService.verifyByHash', () => {
       valid: true,
       txHash: HASH,
       payer: PAYER,
+      paidAt: expect.any(Date),
     });
   });
 

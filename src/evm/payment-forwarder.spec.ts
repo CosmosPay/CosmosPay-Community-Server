@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { SANDBOX_USD_ARTIFACT } from '@/evm/sandbox-usd.artifact';
 import { PAYMENT_FORWARDER_ARTIFACT } from '@/evm/payment-forwarder.artifact';
 import { MERCHANT_FEE_SWAP_ROUTER_ARTIFACT } from '@/evm/merchant-fee-swap-router.artifact';
 import { PAYMENT_SPLIT_FORWARDER_ARTIFACT } from '@/evm/payment-split-forwarder.artifact';
@@ -133,6 +134,7 @@ describe.each([
   ['PaymentForwarder', PAYMENT_FORWARDER_ARTIFACT],
   ['PaymentSplitForwarder', PAYMENT_SPLIT_FORWARDER_ARTIFACT],
   ['MerchantFeeSwapRouter', MERCHANT_FEE_SWAP_ROUTER_ARTIFACT],
+  ['SandboxUsd', SANDBOX_USD_ARTIFACT],
 ] as const)('%s artifact', (name, artifact) => {
   it('is the committed source, compiled with the recorded settings', () => {
     const source = readFileSync(

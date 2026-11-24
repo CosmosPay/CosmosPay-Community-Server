@@ -48,6 +48,36 @@ describe('callJsonRpc', () => {
     expect((err as JsonRpcError).code).toBe(-32602);
   });
 
+  it("sends object params as they are, and keeps a node's named cause (NEAR)", async () => {
+    respond(
+      200,
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        error: {
+          name: 'HANDLER_ERROR',
+          cause: {
+            name: 'UNKNOWN_TRANSACTION',
+            info: { requested_transaction_hash: 'abc' },
+          },
+          code: -32000,
+          message: 'Server error',
+          data: "Transaction abc doesn't exist",
+        },
+      }),
+    );
+    const err = (await errorOf(
+      callJsonRpc(target, 'tx', { tx_hash: 'abc', wait_until: 'NONE' }),
+    )) as JsonRpcError;
+    const [, init] = (global.fetch as jest.Mock).mock.calls[0];
+    expect(JSON.parse(init.body).params).toEqual({
+      tx_hash: 'abc',
+      wait_until: 'NONE',
+    });
+    expect(err.causeName).toBe('UNKNOWN_TRANSACTION');
+    expect(err.causeInfo).toEqual({ requested_transaction_hash: 'abc' });
+  });
+
   it.each([429, 500, 503])(
     'answers HTTP %i as 503 provider_unavailable',
     async (status) => {

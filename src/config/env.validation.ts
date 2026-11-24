@@ -1,5 +1,5 @@
 import { Logger } from '@nestjs/common';
-import { plainToInstance } from 'class-transformer';
+import { plainToInstance, Transform } from 'class-transformer';
 import {
   IsBooleanString,
   IsIn,
@@ -23,6 +23,25 @@ import { StrKey } from '@stellar/stellar-sdk';
 /** Validate a variable only when it holds something: an empty value is an unset one. */
 const isSet = (_: object, value: unknown) =>
   value !== undefined && value !== null && value !== '';
+
+/**
+ * A blank NUMERIC variable is an unset one too. `isSet` alone cannot see it:
+ * implicit conversion turns `''` into `0` before any validator runs (and before
+ * a `@Transform`, which is why this reads the raw value from `obj`), so a
+ * `KOYWE_MIN_ARS=` left empty failed `@Min(1)` with the plugin off.
+ */
+const blankAsUnset = ({
+  value,
+  key,
+  obj,
+}: {
+  value: unknown;
+  key: string;
+  obj: Record<string, unknown>;
+}) => {
+  const raw = obj[key];
+  return typeof raw === 'string' && raw.trim() === '' ? undefined : value;
+};
 
 const URL_OPTIONS = {
   require_protocol: true,
@@ -203,6 +222,36 @@ class EnvironmentVariables {
     message: 'MONAD_RELAYER_PRIVATE_KEY must be a 32-byte hex secret key',
   })
   MONAD_RELAYER_PRIVATE_KEY?: string;
+
+  // --- Sandbox settlement (payment links on test networks) ---
+  /** BIP-32 seed every sandbox deposit address is derived from: 16 to 64 bytes, hex. */
+  @IsOptional()
+  @Matches(/^(0x)?(?:[0-9a-fA-F]{2}){16,64}$/, {
+    message: 'SANDBOX_DEPOSIT_SEED must be a 16 to 64-byte hex seed',
+  })
+  SANDBOX_DEPOSIT_SEED?: string;
+
+  /** The sandbox treasury's EVM key: it pays merchants on test networks only. */
+  @IsOptional()
+  @Matches(/^(0x)?[0-9a-fA-F]{64}$/, {
+    message: 'SANDBOX_TREASURY_PRIVATE_KEY must be a 32-byte hex secret key',
+  })
+  SANDBOX_TREASURY_PRIVATE_KEY?: string;
+
+  /** `net=url,...`: checked in full by `parseNetworkMap`. */
+  @IsOptional()
+  @IsString()
+  SANDBOX_RPC_URLS?: string;
+
+  /** `net=0x...,...`: checked in full by `parseNetworkMap`. */
+  @IsOptional()
+  @IsString()
+  SANDBOX_CUSD_ADDRESSES?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  SANDBOX_RPC_TIMEOUT_MS?: number;
 
   /** `{"0xToken…": "0.05"}` — checked in full by `parseEvmTokenFees`. */
   @IsOptional()
@@ -710,12 +759,14 @@ class EnvironmentVariables {
   @Matches(/^\d{22}$/)
   KOYWE_CVU?: string;
 
-  @IsOptional()
+  @Transform(blankAsUnset)
+  @ValidateIf(isSet)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(1)
   KOYWE_MIN_ARS?: number;
 
-  @IsOptional()
+  @Transform(blankAsUnset)
+  @ValidateIf(isSet)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(1)
   KOYWE_MAX_ARS?: number;
@@ -860,6 +911,22 @@ export function validateEnv(config: Record<string, unknown>) {
       'SWAP_COMMISSION_DEV_WAIVER=true is refused when NODE_ENV=production: it gives ' +
         'swaps away with no commission whenever a fee recipient is missing. Set ' +
         'NEAR_INTENTS_FEE_RECIPIENT, SOLANA_SWAP_FEE_WALLET and MONAD_SWAP_FEE_WALLET instead.',
+    );
+  }
+
+  // The sandbox treasury holds test funds and signs on test networks only; the
+  // Monad relayer signs forwarder deployments on mainnet and nothing else. One key
+  // for both would give each a second use, which both their threat models exclude.
+  const hexKey = (v: string | undefined) =>
+    (v ?? '').trim().toLowerCase().replace(/^0x/, '');
+  if (
+    validated.SANDBOX_TREASURY_PRIVATE_KEY &&
+    hexKey(validated.SANDBOX_TREASURY_PRIVATE_KEY) ===
+      hexKey(validated.MONAD_RELAYER_PRIVATE_KEY)
+  ) {
+    throw new Error(
+      'SANDBOX_TREASURY_PRIVATE_KEY must not be MONAD_RELAYER_PRIVATE_KEY: the ' +
+        'sandbox treasury and the mainnet relayer are separate keys.',
     );
   }
 

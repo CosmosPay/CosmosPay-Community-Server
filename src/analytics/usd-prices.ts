@@ -1,13 +1,12 @@
-import {
-  isChain,
-  MAX_TOKEN_DECIMALS,
-  NATIVE_ASSET_CODES,
-} from '@/chains/chains.constants';
+import { MAX_TOKEN_DECIMALS } from '@/chains/chains.constants';
 import {
   supportedAssets,
   type CrossChainAsset,
 } from '@/cross-chain-swaps/cross-chain-assets';
-import { CROSS_CHAIN_NETWORKS } from '@/cross-chain-swaps/cross-chain-networks';
+import {
+  CROSS_CHAIN_NETWORKS,
+  isCrossChainNetworkId,
+} from '@/cross-chain-swaps/cross-chain-networks';
 import { formatNumericAmount } from '@/common/money';
 import type { NearIntentsToken } from '@/near-intents/near-intents.types';
 
@@ -66,10 +65,12 @@ export function usdPricer(
   }
 
   return ({ chain, asset, issuer }) => {
-    if (!isChain(chain)) return null;
+    // Every network a payment link settles on is priced, not only the three
+    // chains with a verifier of our own.
+    if (!isCrossChainNetworkId(chain)) return null;
     const listed = byChain.get(chain) ?? [];
     const code = asset.trim().toLowerCase();
-    const coin = NATIVE_ASSET_CODES[chain].toLowerCase();
+    const coin = CROSS_CHAIN_NETWORKS[chain].nativeSymbol.toLowerCase();
 
     if (!issuer) {
       if (code === '' || code === 'native' || code === coin) {

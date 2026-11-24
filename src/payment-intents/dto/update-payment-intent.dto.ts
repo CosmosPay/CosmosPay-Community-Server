@@ -1,5 +1,5 @@
 import { ApiPropertyOptional, ApiSchema } from '@nestjs/swagger';
-import { Transform } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   IsEnum,
   IsIn,
@@ -7,7 +7,9 @@ import {
   IsString,
   Matches,
   MaxLength,
+  ValidateNested,
 } from 'class-validator';
+import { DepositLimitsDto } from '@/payment-intents/dto/deposit-limits.dto';
 import { PaymentIntentStatus } from '@generated/prisma/client';
 import {
   ANY_TX_ID_RE,
@@ -80,4 +82,16 @@ export class UpdatePaymentIntentDto {
   @IsOptional()
   @IsIn(CHECKOUT_THEMES)
   checkoutTheme?: CheckoutTheme;
+
+  @ApiPropertyOptional({
+    type: DepositLimitsDto,
+    description:
+      'Your limits on payments from another network for this link. Accepted ' +
+      'in any status, alone or with the other fields; a field left out keeps ' +
+      'its value.',
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => DepositLimitsDto)
+  depositLimits?: DepositLimitsDto;
 }

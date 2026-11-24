@@ -113,4 +113,9 @@ export enum AdvisoryLockKey {
   ProtectedPaymentDeadline = 881_018,
   // Payment requests paid by bank transfer (native plugin `koywe`).
   BankTransferSweep = 881_019,
+  // 881_020 is left to a branch in flight that already claims it.
+  PaymentDepositObserver = 881_021,
+  // 881_022 is the deposit slots' two-key class (`PAYMENT_DEPOSIT_LOCK_CLASS`).
+  PaymentReceiptSweeper = 881_023,
+  SandboxDepositObserver = 881_024,
 }

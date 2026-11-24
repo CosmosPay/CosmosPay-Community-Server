@@ -131,6 +131,7 @@ describe('PaymentIntentsService.transition (guards + audit)', () => {
       new ConsumerResolverService(prisma as never),
       customers as any,
       {} as any,
+      {} as never,
     );
   });
 
@@ -224,6 +225,24 @@ describe('PaymentIntentsService.transition (guards + audit)', () => {
         txHash: 'd'.repeat(64),
         payer: 'GPAYER',
       }),
+    );
+  });
+
+  it("carries the settling transaction's on-chain time to the transition", async () => {
+    const spy = jest.spyOn(service, 'transition');
+    const paidAt = new Date('2026-11-17T11:30:00.000Z');
+    await service.markSucceeded(
+      row.id,
+      'cosmos_u1',
+      'd'.repeat(64),
+      'GPAYER',
+      'observer',
+      paidAt,
+    );
+    expect(spy).toHaveBeenCalledWith(
+      row.id,
+      'SUCCEEDED',
+      expect.objectContaining({ paidAt }),
     );
   });
 
@@ -732,6 +751,7 @@ describe('PaymentIntentsService API settlement is chain-verified', () => {
       new ConsumerResolverService(prisma),
       { ensureForPayer: jest.fn().mockResolvedValue(undefined) } as never,
       {} as never,
+      {} as never,
     );
     return { service, prisma, verify };
   }
@@ -742,8 +762,15 @@ describe('PaymentIntentsService API settlement is chain-verified', () => {
     const view = await service.findOne(consumer, 'pi_1');
 
     // The stored row carries consumerId; the spread used to send it out.
+    // The stored limits are answered as the limits that apply.
     expect(Object.keys(view).sort()).toEqual(
-      [...Object.keys(PAYMENT_INTENT_PUBLIC_SELECT), 'qr'].sort(),
+      [
+        ...Object.keys(PAYMENT_INTENT_PUBLIC_SELECT).filter(
+          (k) => k !== 'depositMaxPerPayer' && k !== 'depositBudgetPerWindow',
+        ),
+        'depositLimits',
+        'qr',
+      ].sort(),
     );
     expect(view).not.toHaveProperty('consumerId');
   });
