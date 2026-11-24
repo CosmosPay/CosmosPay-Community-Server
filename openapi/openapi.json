@@ -16366,7 +16366,7 @@
     },
     "/v1/payment-links/fiat/{id}/transfers": {
       "post": {
-        "description": "For a request whose `methods` include `transfer`: the payer gives their CUIT/CUIL or DNI and is answered the exact amount, the alias and CVU to transfer it to and until when (an hour, never past the charge). The transfer must come from an account in the payer’s own name; it is detected on its own and the charge reads `processing`, then `paid`. The same document answers the same transfer (`200`), a new one `201`; only an HMAC of the document and its last three digits are kept. `400 invalid_document`, `400 method_unavailable` when the charge cannot be paid this way, `409 request_closed` unless it is open, `503 transfer_unavailable` when the account cannot be given right now.",
+        "description": "For a request whose `methods` include `transfer`: the payer gives their CUIT/CUIL or DNI and is answered the exact amount, the alias and CVU to transfer it to and until when (an hour, never past the charge). The transfer must come from an account in the payer’s own name; it is detected on its own and the charge reads `processing`, then `paid`. The same document answers the same transfer, with `200` whether it is new or not; only an HMAC of the document and its last three digits are kept. `400 invalid_document`, `400 method_unavailable` when the charge cannot be paid this way, `409 request_closed` unless it is open, `503 transfer_unavailable` when the account cannot be given right now.",
         "operationId": "BankTransferLinksController_open_v1",
         "parameters": [
           {
@@ -16392,40 +16392,7 @@
         },
         "responses": {
           "200": {
-            "description": "The transfer this document already has for the charge.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BankTransferEntity"
-                }
-              }
-            },
-            "headers": {
-              "ratelimit-limit": {
-                "description": "Requests allowed in the current window.",
-                "schema": {
-                  "type": "integer",
-                  "example": 30
-                }
-              },
-              "ratelimit-remaining": {
-                "description": "Requests left in the current window.",
-                "schema": {
-                  "type": "integer",
-                  "example": 0
-                }
-              },
-              "ratelimit-reset": {
-                "description": "Seconds until the window resets.",
-                "schema": {
-                  "type": "integer",
-                  "example": 42
-                }
-              }
-            }
-          },
-          "201": {
-            "description": "A new transfer was opened for this document.",
+            "description": "The transfer of this document for the charge, opened now or before (the answer does not say which).",
             "content": {
               "application/json": {
                 "schema": {

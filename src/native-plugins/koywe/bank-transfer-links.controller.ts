@@ -2,19 +2,17 @@ import {
   Body,
   Controller,
   Header,
+  HttpCode,
   HttpStatus,
   Param,
   Post,
-  Res,
 } from '@nestjs/common';
 import {
-  ApiCreatedResponse,
   ApiOkResponse,
   ApiOperation,
   ApiParam,
   ApiTags,
 } from '@nestjs/swagger';
-import type { Response } from 'express';
 import { ApiErrorResponse } from '@/common/decorators/api-error-response.decorator';
 import { Public } from '@/common/decorators/public.decorator';
 import { RateLimit } from '@/common/decorators/rate-limit.decorator';
@@ -42,6 +40,10 @@ export class BankTransferLinksController {
   constructor(private readonly transfers: BankTransfersService) {}
 
   @Post(':id/transfers')
+  // `200` whether the transfer is new or not: a status that differed would
+  // tell anyone holding the link whether a CUIT/CUIL or DNI already asked to
+  // pay this charge.
+  @HttpCode(HttpStatus.OK)
   @Public()
   @RateLimit(BANK_TRANSFER_RATE_LIMIT)
   @Header('Cache-Control', 'no-store')
@@ -50,7 +52,7 @@ export class BankTransferLinksController {
     description:
       'For a request whose `methods` include `transfer`: the payer gives their CUIT/CUIL or DNI and is answered the exact amount, the alias and CVU to transfer it to and until when (an hour, never past the charge). ' +
       'The transfer must come from an account in the payer’s own name; it is detected on its own and the charge reads `processing`, then `paid`. ' +
-      'The same document answers the same transfer (`200`), a new one `201`; only an HMAC of the document and its last three digits are kept. ' +
+      'The same document answers the same transfer, with `200` whether it is new or not; only an HMAC of the document and its last three digits are kept. ' +
       '`400 invalid_document`, `400 method_unavailable` when the charge cannot be paid this way, `409 request_closed` unless it is open, `503 transfer_unavailable` when the account cannot be given right now.',
   })
   @ApiParam({
@@ -59,13 +61,10 @@ export class BankTransferLinksController {
       'The payment request id, as in its page `https://payments.cosmospay.lat/fiat/<id>`.',
     example: ID,
   })
-  @ApiCreatedResponse({
-    type: BankTransferEntity,
-    description: 'A new transfer was opened for this document.',
-  })
   @ApiOkResponse({
     type: BankTransferEntity,
-    description: 'The transfer this document already has for the charge.',
+    description:
+      'The transfer of this document for the charge, opened now or before (the answer does not say which).',
   })
   @ApiErrorResponse({
     status: 400,
@@ -111,13 +110,8 @@ export class BankTransferLinksController {
   async open(
     @Param() params: BankTransferParamsDto,
     @Body() dto: CreateBankTransferDto,
-    @Res({ passthrough: true }) res: Response,
   ): Promise<BankTransferEntity> {
-    const { transfer, created } = await this.transfers.open(
-      params.id,
-      dto.document,
-    );
-    res.status(created ? HttpStatus.CREATED : HttpStatus.OK);
+    const { transfer } = await this.transfers.open(params.id, dto.document);
     return transfer;
   }
 }

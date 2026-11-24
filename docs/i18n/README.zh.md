@@ -1529,7 +1529,7 @@ CREATED | AWAITING_FUNDING --merchant cancels--> CANCELLED
 | POST | `/v1/onramp/transfer/webhooks` | 无（`@Public()`，已签名） | 合作方的存款、兑换订单和 KYB 结果 |
 
 - **资金属于卖家，以卖家名义。** 存款进入卖家自有商户的余额；Cosmos Pay 通过合作方把整笔存款兑换为收款的代币（一个报价和一个 `externalId` 为转账 id 的 ONRAMP 订单），由合作方发送到收款的 `address`。从存款到订单完成，收款显示为 `processing`，之后显示为 `paid` 并带有 `paidMethod: "transfer"`；`processing` 的收款永远不会显示为过期，也不能取消。设置 `KOYWE_POOLED_ENABLED=true` 时，Cosmos Pay 自己的商户（`KOYWE_MERCHANT_ID` / `KOYWE_SANDBOX_MERCHANT_ID`）承接没有获批账户的卖家（包括共享公钥）的收款，资金在这几分钟内经过 Cosmos Pay 的账户。默认关闭。
-- **付款方的证件用于识别存款，且从不保存。** 转账路由接受 CUIT/CUIL（校验位已验证）或 DNI，只保存其 DNI 部分在 `KOYWE_DOCUMENT_PEPPER` 下的 HMAC-SHA256 和三位数字；没有 pepper 时不提供任何转账。同一证件会得到同一笔转账。同一付款方在同一商户的每笔未结转账要求的金额都不同：同金额的第二笔收款会多要几分钱，响应中的 `amount` 就是应转账的金额。
+- **付款方的证件用于识别存款，且从不保存。** 转账路由接受 CUIT/CUIL（校验位已验证）或 DNI，只保存其 DNI 部分在 `KOYWE_DOCUMENT_PEPPER` 下的 HMAC-SHA256 和三位数字；没有 pepper 时不提供任何转账。同一证件会得到同一笔转账，无论是否新建都以 `200` 响应，因此该路由从不透露某个证件是否已请求支付该笔收款。同一付款方在同一商户的每笔未结转账要求的金额都不同：同金额的第二笔收款会多要几分钱，响应中的 `amount` 就是应转账的金额。
 - **匹配。** 存款支付同一商户中同一证件、要求金额与存款完全相等的未结转账；更大的存款只有在该付款方在那里只有一笔未结转账时才会支付它（并整笔兑换）。无法匹配的存款（其他证件、金额不足、金额更大但有多个候选）以 `unmatched` 存入 `bank_income_event` 并记录为错误：由运维手动退款。转账在其一小时结束后的 24 小时内仍可匹配。
 - **Webhook。** `POST /v1/onramp/transfer/webhooks` 是 `@Public()`，不在 OpenAPI 契约中。只有当 `Koywe-Signature` 是原始请求体在 `KOYWE_WEBHOOK_SECRET` 或 `KOYWE_SANDBOX_WEBHOOK_SECRET` 下的小写十六进制 HMAC-SHA256（以恒定时间比较）时才接受投递；验证成功的密钥决定网络。其他一律为 `401 webhook_signature_invalid`。在应用任何内容之前先保存每个信封 id（重复投递不会改变任何东西），立即返回响应，对合作方的调用随后执行；只有保存失败时才返回 `5xx`，以便合作方重新投递。
 - **卡住的兑换。** 合作方的审批策略必须允许 API 用户在所有商户上创建商户、触发 KYB、创建虚拟账户、CRYPTO 账户和 ONRAMP 订单。被策略挂起的订单或账户会使转账保持 `converting` 并附原因，并记录为错误。清扫任务（每分钟一次，需 `OBSERVER_ENABLED`）重试没有订单的兑换（从一分钟开始，加倍，最多一小时），重新读取十分钟后仍未完成的订单，并每十分钟重新读取待处理的 KYB。失败的订单会让收款停留在 `processing`，比索留在商户余额中：交由运维。
