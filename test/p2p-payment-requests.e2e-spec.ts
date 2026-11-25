@@ -162,6 +162,8 @@ describe('P2P payment requests (e2e)', () => {
     paymentIntent: { findUnique: jest.fn().mockResolvedValue(null) },
     p2pPaymentRequest: requests,
     p2pRampSession: sessions,
+    // The bank transfer rail (plugin `koywe`) asks for the seller's account: none here.
+    bankTransferAccount: { findUnique: jest.fn().mockResolvedValue(null) },
   };
 
   beforeAll(async () => {
@@ -354,6 +356,8 @@ describe('P2P payment requests (e2e)', () => {
         tokenAddress: SANDBOX_USDT,
         estimatedAmountOut: '6.00',
         paymentMethods: [{ id: 'bank_tx_ar', name: 'CVU/CBU o Alias (ARS)' }],
+        // No bank transfer: the seller has no bank transfer account.
+        methods: ['p2p'],
         expiresAt: expect.any(String),
         createdAt: expect.any(String),
         paidAt: null,

@@ -4,11 +4,13 @@ import { P2pOfframpController } from '@/native-plugins/eldorado/p2p-offramp.cont
 import { P2pOnrampController } from '@/native-plugins/eldorado/p2p-onramp.controller';
 import { P2pOrderEventsService } from '@/native-plugins/eldorado/p2p-order-events.service';
 import { P2pPaymentLinksController } from '@/native-plugins/eldorado/p2p-payment-links.controller';
+import { P2pPaymentRequestLedger } from '@/native-plugins/eldorado/p2p-payment-request-ledger.service';
 import { P2pPaymentRequestsController } from '@/native-plugins/eldorado/p2p-payment-requests.controller';
 import { P2pPaymentRequestsService } from '@/native-plugins/eldorado/p2p-payment-requests.service';
 import { P2pRampService } from '@/native-plugins/eldorado/p2p-ramp.service';
 import { P2pWebhookKeys } from '@/native-plugins/eldorado/p2p-webhook-keys.service';
 import { P2pWebhooksController } from '@/native-plugins/eldorado/p2p-webhooks.controller';
+import { PaymentRequestRailsModule } from '@/payment-request-rails/payment-request-rails.module';
 
 /**
  * The `eldorado` native plugin: stablecoins traded for local money with P2P
@@ -19,9 +21,13 @@ import { P2pWebhooksController } from '@/native-plugins/eldorado/p2p-webhooks.co
  * chain itself, so it is served only when `PLUGINS_ENABLED` lists `eldorado`.
  * Owns the `p2p_ramp_session` table (the purchases and sales it opened for
  * each consumer, with what the marketplace's webhook reports about them) and
- * `p2p_payment_request`.
+ * `p2p_payment_request`, which other plugins' rails (a bank transfer) reach
+ * only through the core's `PaymentRequestRails`, where this plugin registers
+ * its ledger. Without any of them, a request is paid through the marketplace
+ * alone, as it always was.
  */
 @Module({
+  imports: [PaymentRequestRailsModule],
   controllers: [
     P2pOnrampController,
     P2pOfframpController,
@@ -33,6 +39,7 @@ import { P2pWebhooksController } from '@/native-plugins/eldorado/p2p-webhooks.co
     EldoradoClient,
     P2pRampService,
     P2pPaymentRequestsService,
+    P2pPaymentRequestLedger,
     P2pWebhookKeys,
     P2pOrderEventsService,
   ],

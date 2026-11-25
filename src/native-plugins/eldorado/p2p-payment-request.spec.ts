@@ -1,7 +1,9 @@
 import {
   effectiveStatus,
   P2P_PAYMENT_REQUEST_PAYER_SELECT,
+  p2pTakes,
   paymentRequestUrl,
+  storedMethods,
   toPublicPaymentRequest,
 } from '@/native-plugins/eldorado/p2p-payment-request';
 
@@ -24,12 +26,14 @@ const FULL_ROW = {
   address: '0x52908400098527886E0F7030069857D2E4169EE7',
   description: 'Table 4',
   estimatedAmountOut: '9.00',
+  methods: ['p2p'],
   expiresAt: LATER,
   createdAt: NOW,
   paidAt: null,
   paidAmount: '9.95',
   paidTxHash: `0x${'ab'.repeat(32)}`,
   paidSessionId: 'clz_s1',
+  paidMethod: null,
   cancelledAt: null,
   updatedAt: NOW,
 };
@@ -62,6 +66,10 @@ describe('payment request rules', () => {
     for (const status of ['paid', 'cancelled'] as const) {
       expect(effectiveStatus({ ...row, status }, LATER)).toBe(status);
     }
+    // The money arrived: a processing request never reads as expired.
+    expect(effectiveStatus({ ...row, status: 'processing' }, LATER)).toBe(
+      'processing',
+    );
     // `expired` is never stored, and nothing else may be.
     expect(() => effectiveStatus({ ...row, status: 'expired' }, NOW)).toThrow(
       'Payment request r1 has unknown status "expired"',
@@ -94,7 +102,12 @@ describe('payment request rules', () => {
   });
 
   it('answers the payer exactly the public fields, whatever row it is handed', () => {
-    const view = toPublicPaymentRequest(FULL_ROW, LIVE, NOW);
+    const view = toPublicPaymentRequest(
+      FULL_ROW,
+      LIVE,
+      ['transfer', 'p2p'],
+      NOW,
+    );
 
     expect(view).toEqual({
       id: FULL_ROW.id,
@@ -109,6 +122,7 @@ describe('payment request rules', () => {
       // Live: 16000 / 1600 / 1, not the stored estimate.
       estimatedAmountOut: '10.00',
       paymentMethods: [{ id: 'bank_tx_ar', name: 'CVU/CBU o Alias (ARS)' }],
+      methods: ['transfer', 'p2p'],
       expiresAt: '2026-11-13T12:00:00.000Z',
       createdAt: '2026-11-12T12:00:00.000Z',
       paidAt: null,
@@ -123,6 +137,7 @@ describe('payment request rules', () => {
     const view = toPublicPaymentRequest(
       FULL_ROW,
       { currency: null, token: null },
+      [],
       LATER,
     );
 
@@ -135,8 +150,26 @@ describe('payment request rules', () => {
       toPublicPaymentRequest(
         FULL_ROW,
         { currency: LIVE.currency, token: null },
+        ['p2p'],
         NOW,
       ).estimatedAmountOut,
     ).toBeNull();
+  });
+
+  it('keeps the stored methods in preference order, dropping unknown ones', () => {
+    expect(storedMethods(['p2p', 'transfer', 'cash'])).toEqual([
+      'transfer',
+      'p2p',
+    ]);
+    expect(storedMethods([])).toEqual([]);
+  });
+
+  it('says whether the live market takes a request’s amount, or that it could not tell', () => {
+    expect(p2pTakes('16000', LIVE)).toBe(true);
+    expect(p2pTakes('7999', LIVE)).toBe(false);
+    expect(p2pTakes('16000', { currency: LIVE.currency, token: null })).toBe(
+      false,
+    );
+    expect(p2pTakes('16000', null)).toBeNull();
   });
 });

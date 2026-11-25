@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { createSign, generateKeyPairSync } from 'node:crypto';
 import { ApiErrorCode } from '@/common/errors/api-error';
 import type { EldoradoClient } from '@/native-plugins/eldorado/eldorado.client';
@@ -18,6 +19,10 @@ function table(rows: Row[]) {
   return {
     rows,
     findFirst: jest.fn(({ where }: { where: Row }) => {
+      const row = rows.find((r) => matches(r, where));
+      return Promise.resolve(row ? { ...row } : null);
+    }),
+    findUnique: jest.fn(({ where }: { where: Row }) => {
       const row = rows.find((r) => matches(r, where));
       return Promise.resolve(row ? { ...row } : null);
     }),
@@ -317,11 +322,68 @@ describe('P2pOrderEventsService', () => {
 
     it('lets the first completion win when two purchases pay one request', async () => {
       const { service, request } = setup([session('s1'), session('s2')]);
+      const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
 
       await service.receive(delivery(order('cp-s2', 'COMPLETED')));
       await service.receive(delivery(order('cp-s1', 'COMPLETED')));
 
-      expect(request.paidSessionId).toBe('s2');
+      expect(request).toMatchObject({ paidSessionId: 's2', paidMethod: 'p2p' });
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'was already paid (p2p): session s1 also completed',
+        ),
+      );
+      warn.mockRestore();
+    });
+
+    it('pays a request a bank transfer is processing: the first completion wins, and the transfer is the one logged later', async () => {
+      const { service, request } = setup([session('s1')], {
+        status: 'processing',
+      });
+
+      await service.receive(delivery(order('cp-s1', 'COMPLETED')));
+
+      expect(request).toMatchObject({
+        status: 'paid',
+        paidMethod: 'p2p',
+        paidSessionId: 's1',
+        paidAmount: '9.95',
+      });
+    });
+
+    it('does not log a redelivery of the completion that paid the request', async () => {
+      const { service } = setup([session('s1')]);
+      const completed = delivery(order('cp-s1', 'COMPLETED'));
+      const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+
+      await service.receive(completed);
+      await service.receive(completed);
+
+      expect(warn).not.toHaveBeenCalled();
+      warn.mockRestore();
+    });
+
+    it('does not pay a request another rail already paid', async () => {
+      const paidAt = new Date('2026-11-12T12:00:00.000Z');
+      const { service, request } = setup([session('s1')], {
+        status: 'paid',
+        paidAt,
+        paidMethod: 'transfer',
+        paidAmount: '9.90',
+      });
+      const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+
+      await service.receive(delivery(order('cp-s1', 'COMPLETED')));
+
+      expect(request).toMatchObject({
+        paidAt,
+        paidMethod: 'transfer',
+        paidAmount: '9.90',
+      });
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('was already paid (transfer)'),
+      );
+      warn.mockRestore();
     });
 
     it('records a session with no payment request without touching any request', async () => {

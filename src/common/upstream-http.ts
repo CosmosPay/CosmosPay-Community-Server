@@ -21,12 +21,30 @@ export interface UpstreamRequest {
   headers?: Record<string, string>;
   body?: unknown;
   timeoutMs: number;
+  /**
+   * Throw {@link UpstreamUnauthorized} on a 401 instead of `misconfigured`:
+   * for a client whose bearer token expires, which signs in again once
+   * before it calls the key wrong.
+   */
+  unauthorizedIsRetryable?: boolean;
+  /**
+   * Applied to the provider's own text before it is logged or relayed: for a
+   * provider that may echo personal data it was sent (a tax id) in an error.
+   */
+  redact?: (text: string) => string;
 }
 
 /** The provider answered 404. Only some callers give that a meaning. */
 export class UpstreamNotFound extends Error {
   constructor(readonly provider: string) {
     super(`Not found at ${provider}`);
+  }
+}
+
+/** The provider answered 401 to a request that asked to hear it ({@link UpstreamRequest.unauthorizedIsRetryable}). */
+export class UpstreamUnauthorized extends Error {
+  constructor(readonly provider: string) {
+    super(`Unauthorized at ${provider}`);
   }
 }
 
@@ -69,11 +87,19 @@ export async function requestUpstreamJson<T>(
     const payload = safeJsonParse(text);
     if (res.ok) return payload as T;
 
-    const message = upstreamMessage(payload);
-    logger.warn(`${label} -> ${res.status}: ${message ?? text.slice(0, 200)}`);
+    const redact = req.redact ?? ((line: string) => line);
+    const raw = upstreamMessage(payload);
+    const message = raw === null ? null : redact(raw);
+    logger.warn(
+      `${label} -> ${res.status}: ${message ?? redact(text.slice(0, 200))}`,
+    );
     throw statusError(req, res.status, message);
   } catch (err) {
-    if (err instanceof HttpException || err instanceof UpstreamNotFound) {
+    if (
+      err instanceof HttpException ||
+      err instanceof UpstreamNotFound ||
+      err instanceof UpstreamUnauthorized
+    ) {
       throw err;
     }
     if (err instanceof Error && err.name === 'AbortError') {
@@ -102,6 +128,9 @@ function statusError(
   message: string | null,
 ): Error {
   if (status === 404) return new UpstreamNotFound(req.provider);
+  if (status === 401 && req.unauthorizedIsRetryable) {
+    return new UpstreamUnauthorized(req.provider);
+  }
   if (status === 400 || status === 422) {
     return ApiError.badRequest(
       ApiErrorCode.ProviderError,

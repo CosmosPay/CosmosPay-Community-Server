@@ -1,21 +1,47 @@
 import { Logger } from '@nestjs/common';
-import { plainToInstance } from 'class-transformer';
+import { plainToInstance, Transform } from 'class-transformer';
 import {
   IsBooleanString,
   IsIn,
   IsInt,
   IsNotEmpty,
+  IsNumber,
   IsOptional,
   IsString,
   IsUrl,
   Matches,
   Max,
+  MaxLength,
   Min,
   MinLength,
+  ValidateIf,
   validateSync,
   type ValidationError,
 } from 'class-validator';
 import { StrKey } from '@stellar/stellar-sdk';
+
+/** Validate a variable only when it holds something: an empty value is an unset one. */
+const isSet = (_: object, value: unknown) =>
+  value !== undefined && value !== null && value !== '';
+
+/**
+ * A blank NUMERIC variable is an unset one too. `isSet` alone cannot see it:
+ * implicit conversion turns `''` into `0` before any validator runs (and before
+ * a `@Transform`, which is why this reads the raw value from `obj`), so a
+ * `KOYWE_MIN_ARS=` left empty failed `@Min(1)` with the plugin off.
+ */
+const blankAsUnset = ({
+  value,
+  key,
+  obj,
+}: {
+  value: unknown;
+  key: string;
+  obj: Record<string, unknown>;
+}) => {
+  const raw = obj[key];
+  return typeof raw === 'string' && raw.trim() === '' ? undefined : value;
+};
 
 const URL_OPTIONS = {
   require_protocol: true,
@@ -646,6 +672,120 @@ class EnvironmentVariables {
   @IsOptional()
   @IsUrl(URL_OPTIONS)
   ELDORADO_WEBHOOK_JWKS_URL_TESTNET?: string;
+
+  // --- Payment requests paid by bank transfer (native plugin `koywe`) ---
+  // The types only. Every value is optional: the rail is off for a network
+  // whose set is incomplete. How they relate (two different webhook secrets,
+  // a sandbox network and token the provider pairs, the minimum under the
+  // maximum, the `eldorado` plugin enabled) is checked when the plugin boots
+  // (`assertKoyweConfigConsistent`). An empty value is an unset one, as
+  // `.env.example` leaves them.
+  @ValidateIf(isSet)
+  @IsUrl(URL_OPTIONS)
+  KOYWE_API_URL?: string;
+
+  @IsOptional()
+  @IsString()
+  KOYWE_API_KEY?: string;
+
+  @IsOptional()
+  @IsString()
+  KOYWE_SECRET?: string;
+
+  @IsOptional()
+  @IsString()
+  KOYWE_ORGANIZATION_ID?: string;
+
+  @IsOptional()
+  @IsString()
+  KOYWE_MERCHANT_ID?: string;
+
+  /** Chosen by the operator when registering the webhook endpoint: long and random. */
+  @ValidateIf(isSet)
+  @IsString()
+  @MinLength(32)
+  KOYWE_WEBHOOK_SECRET?: string;
+
+  @ValidateIf(isSet)
+  @IsUrl(URL_OPTIONS)
+  KOYWE_SANDBOX_API_URL?: string;
+
+  @IsOptional()
+  @IsString()
+  KOYWE_SANDBOX_API_KEY?: string;
+
+  @IsOptional()
+  @IsString()
+  KOYWE_SANDBOX_SECRET?: string;
+
+  @IsOptional()
+  @IsString()
+  KOYWE_SANDBOX_ORGANIZATION_ID?: string;
+
+  @IsOptional()
+  @IsString()
+  KOYWE_SANDBOX_MERCHANT_ID?: string;
+
+  @ValidateIf(isSet)
+  @IsString()
+  @MinLength(32)
+  KOYWE_SANDBOX_WEBHOOK_SECRET?: string;
+
+  /** The EVM networks v1 converts on. */
+  @ValidateIf(isSet)
+  @IsIn([
+    'ETHEREUM',
+    'POLYGON',
+    'BASE',
+    'BSC',
+    'ethereum',
+    'polygon',
+    'base',
+    'bsc',
+  ])
+  KOYWE_SANDBOX_NETWORK?: string;
+
+  @ValidateIf(isSet)
+  @IsIn(['USDC', 'USDT', 'usdc', 'usdt'])
+  KOYWE_SANDBOX_TOKEN?: string;
+
+  /** Let Cosmos Pay's own merchant (KOYWE_MERCHANT_ID) take the requests of sellers without an account. */
+  @ValidateIf(isSet)
+  @IsBooleanString()
+  KOYWE_POOLED_ENABLED?: string;
+
+  /** The key the payer's document is hashed under: without it no bank transfer is offered. */
+  @ValidateIf(isSet)
+  @IsString()
+  @MinLength(32)
+  KOYWE_DOCUMENT_PEPPER?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  KOYWE_ACCOUNT_HOLDER?: string;
+
+  /** An Argentine alias: 6 to 20 letters, digits, dots or hyphens. */
+  @ValidateIf(isSet)
+  @Matches(/^[A-Za-z0-9.-]{6,20}$/)
+  KOYWE_ALIAS?: string;
+
+  /** A CVU: 22 digits. */
+  @ValidateIf(isSet)
+  @Matches(/^\d{22}$/)
+  KOYWE_CVU?: string;
+
+  @Transform(blankAsUnset)
+  @ValidateIf(isSet)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(1)
+  KOYWE_MIN_ARS?: number;
+
+  @Transform(blankAsUnset)
+  @ValidateIf(isSet)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(1)
+  KOYWE_MAX_ARS?: number;
 
   // --- Protected payments (native plugin `trustless-work`) ---
   // The types only. How the per-network keys relate to each other (secrets that

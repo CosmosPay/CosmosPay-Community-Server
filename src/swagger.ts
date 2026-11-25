@@ -222,6 +222,8 @@ const TAG_DESCRIPTIONS: Record<string, string> = {
   onramp: 'Fiat in: quotes, payins and virtual accounts.',
   'p2p-onramp':
     'Stablecoins bought with local money from P2P sellers: the market, a firm quote, and sessions that open a hosted purchase delivered to the address you name.',
+  'bank-transfers':
+    'Charges in pesos paid by bank transfer: your bank transfer account, opened in your name and verified on a hosted form, which payers of your QR charges transfer to.',
   offramp: 'Fiat out: quotes and payouts.',
   'p2p-offramp':
     'Stablecoins sold for local money to P2P buyers: the market, a firm quote, and sessions that open a hosted sale paid with the method you choose.',

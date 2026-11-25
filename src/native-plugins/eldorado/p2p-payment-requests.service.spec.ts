@@ -5,6 +5,10 @@ import { PublicRecordTokens } from '@/common/public-record-token';
 import type { EldoradoClient } from '@/native-plugins/eldorado/eldorado.client';
 import { P2pPaymentRequestsService } from '@/native-plugins/eldorado/p2p-payment-requests.service';
 import { P2pRampService } from '@/native-plugins/eldorado/p2p-ramp.service';
+import {
+  PaymentRequestRails,
+  type PaymentRequestRail,
+} from '@/payment-request-rails/payment-request-rails';
 
 const ADDRESS = '0x52908400098527886E0F7030069857D2E4169EE7';
 const USDT0 = '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9';
@@ -141,8 +145,28 @@ function marketClient() {
   };
 }
 
-function setup() {
+/** A bank transfer rail that takes ARS at or above 1000, delivering the listed token. */
+function transferRail() {
+  const accepts = jest.fn(
+    (
+      terms: { currency: string; amount: string },
+      listed: { symbol: string; decimals: number } | null,
+    ): Promise<{ symbol: string; decimals: number } | null> =>
+      Promise.resolve(
+        terms.currency === 'ARS' && Number(terms.amount) >= 1000
+          ? (listed ?? { symbol: 'USDT', decimals: 6 })
+          : null,
+      ),
+  );
+  const rail: PaymentRequestRail = { method: 'transfer', accepts };
+  return { rail, accepts };
+}
+
+function setup(options: { rail?: boolean } = {}) {
   const client = marketClient();
+  const rails = new PaymentRequestRails();
+  const transfer = transferRail();
+  if (options.rail) rails.registerRail(transfer.rail);
   const prisma = {
     p2pPaymentRequest: table('creq', {
       status: 'open',
@@ -189,8 +213,16 @@ function setup() {
     consumers as never,
     ramp,
     recordTokens,
+    rails,
   );
-  return { service, client, prisma, consumers, recordTokens };
+  return {
+    service,
+    client,
+    prisma,
+    consumers,
+    recordTokens,
+    accepts: transfer.accepts,
+  };
 }
 
 describe('P2pPaymentRequestsService', () => {
@@ -217,6 +249,7 @@ describe('P2pPaymentRequestsService', () => {
         address: ADDRESS,
         description: 'Table 4',
         status: 'open',
+        methods: ['p2p'],
       });
       expect(created).toMatchObject({
         id: 'creq1',
@@ -234,6 +267,8 @@ describe('P2pPaymentRequestsService', () => {
         paidAt: null,
         paidAmount: null,
         paidTxHash: null,
+        paidMethod: null,
+        methods: ['p2p'],
       });
       expect(created.qr).toMatch(/^data:image\/png;base64,/);
       expect(created).not.toHaveProperty('publicToken');
@@ -271,6 +306,138 @@ describe('P2pPaymentRequestsService', () => {
         });
       }
       expect(prisma.p2pPaymentRequest.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('other rails', () => {
+    it('stores and answers the bank transfer first when its rail takes the terms', async () => {
+      const { service, prisma, accepts } = setup({ rail: true });
+
+      const created = await service.create(seller, INPUT);
+
+      expect(created.methods).toEqual(['transfer', 'p2p']);
+      expect(prisma.p2pPaymentRequest.rows[0].methods).toEqual([
+        'transfer',
+        'p2p',
+      ]);
+      // The rail is told who owns the request and what the market lists.
+      expect(accepts).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ownerId: 'c_cosmos_seller',
+          network: 'public',
+          currency: 'ARS',
+          amount: '16000',
+        }),
+        { symbol: 'USDT0', decimals: 6 },
+      );
+    });
+
+    it('creates a request only the bank transfer can pay, keeping the market token and estimate', async () => {
+      const { service, prisma } = setup({ rail: true });
+
+      // Under the market's 8000 minimum, over the rail's 1000.
+      const created = await service.create(seller, {
+        ...INPUT,
+        amount: '5000',
+      });
+
+      expect(created).toMatchObject({
+        methods: ['transfer'],
+        token: 'USDT0',
+        tokenAddress: USDT0,
+        tokenDecimals: 6,
+        // 5000 / 1600 / 1
+        estimatedAmountOut: '3.12',
+      });
+      expect(prisma.p2pPaymentRequest.rows[0].currency).toBe('ARS');
+    });
+
+    it('keeps the market refusal when no rail takes the terms', async () => {
+      const { service, prisma } = setup({ rail: true });
+
+      await expect(
+        service.create(seller, { ...INPUT, amount: '999' }),
+      ).rejects.toMatchObject({
+        code: ApiErrorCode.ValidationFailed,
+        message: 'amount is below the minimum of 8000 ARS',
+      });
+      expect(prisma.p2pPaymentRequest.create).not.toHaveBeenCalled();
+    });
+
+    it('asks the rail again on every read: switched off, the transfer is gone', async () => {
+      const { service, accepts } = setup({ rail: true });
+      const created = await service.create(seller, INPUT);
+
+      accepts.mockResolvedValue(null);
+
+      await expect(service.findOne(seller, created.id)).resolves.toMatchObject({
+        methods: ['p2p'],
+      });
+      await expect(service.findPublic(created.id)).resolves.toMatchObject({
+        methods: ['p2p'],
+      });
+    });
+
+    it('reads a processing request as such, refuses to cancel it, and says how a paid one was paid', async () => {
+      const { service, prisma } = setup();
+      const created = await service.create(seller, INPUT);
+      const row = prisma.p2pPaymentRequest.rows[0];
+
+      Object.assign(row, {
+        status: 'processing',
+        expiresAt: new Date(Date.now() - 1),
+      });
+      await expect(service.findOne(seller, created.id)).resolves.toMatchObject({
+        status: 'processing',
+      });
+      await expect(service.cancel(seller, created.id)).rejects.toMatchObject({
+        code: ApiErrorCode.RequestClosed,
+        message: `Payment request ${created.id} is processing: only an open one can be cancelled`,
+      });
+      await expect(
+        service.openPayerSession(created.id, 'bank_tx_ar'),
+      ).rejects.toMatchObject({ code: ApiErrorCode.RequestClosed });
+
+      Object.assign(row, {
+        status: 'paid',
+        paidAt: new Date(),
+        paidAmount: '9.5',
+        paidMethod: 'transfer',
+      });
+      await expect(service.findOne(seller, created.id)).resolves.toMatchObject({
+        status: 'paid',
+        paidAmount: '9.5',
+        paidMethod: 'transfer',
+      });
+    });
+
+    it('keeps the stored p2p when the market cannot be read, and the payer never sees the owner', async () => {
+      const { service, prisma, client } = setup({ rail: true });
+      const created = await service.create(seller, INPUT);
+      client.currencies.mockRejectedValue(new Error('the market is down'));
+      prisma.p2pPaymentRequest.findUnique.mockClear();
+
+      const view = await service.findPublic(created.id);
+
+      expect(view.methods).toEqual(['transfer', 'p2p']);
+      expect(JSON.stringify(view)).not.toContain('c_cosmos_seller');
+      // The owner is read apart from the payer's projection, for the rails only.
+      const selects = prisma.p2pPaymentRequest.findUnique.mock.calls.map(
+        ([args]) => (args as { select: Row }).select,
+      );
+      expect(selects[0]).not.toHaveProperty('consumerId');
+      expect(selects[1]).toEqual({ consumerId: true });
+    });
+
+    it('drops p2p for the payer when the live market no longer takes the amount', async () => {
+      const { service, prisma } = setup({ rail: true });
+      const created = await service.create(seller, INPUT);
+      // Now under the market's 8000 minimum, still over the rail's 1000.
+      prisma.p2pPaymentRequest.rows[0].amount = '7000';
+
+      await expect(service.findPublic(created.id)).resolves.toMatchObject({
+        methods: ['transfer'],
+      });
     });
   });
 
@@ -403,6 +570,7 @@ describe('P2pPaymentRequestsService', () => {
           'tokenAddress',
           'estimatedAmountOut',
           'paymentMethods',
+          'methods',
           'expiresAt',
           'createdAt',
           'paidAt',
@@ -448,6 +616,8 @@ describe('P2pPaymentRequestsService', () => {
         chainId: 421614,
         token: 'USDT',
         tokenAddress: USDT0,
+        tokenDecimals: 6,
+        methods: ['p2p'],
         expiresAt: new Date(Date.now() + 60_000),
         createdAt: new Date(),
         paidAt: null,
@@ -458,6 +628,7 @@ describe('P2pPaymentRequestsService', () => {
         status: 'open',
         estimatedAmountOut: null,
         paymentMethods: [],
+        methods: ['p2p'],
       });
     });
   });
