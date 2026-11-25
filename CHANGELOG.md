@@ -2,6 +2,64 @@
 
 All notable changes to the Cosmos Pay Community Server are documented here.
 Generated from [Conventional Commits](https://www.conventionalcommits.org) by [git-cliff](https://git-cliff.org).
+## [1.16.0] - 2026-11-25
+
+### Features
+- Charge with a QR in local money through the P2P marketplace (f71ba76)
+- Payment request rails extension point (b6b2cce)
+- Payment methods, processing status and paidMethod on QR charges (e0a76d1)
+- QR charges paid by bank transfer (native plugin koywe) (b517df1)
+- Bank transfer webhook registration and sandbox deposit (ec92609)
+- Personal-data mode for upstream JSON calls (5cdb43d)
+- Marketplace API client for paying from the payer's page (098a324)
+- CBU/CVU check digits (da6c53d)
+- Settle direct orders and reopen on their cancellation (c9df877)
+- Pay an ARS charge from the payer's page (P2P direct) (e119726)
+- Payment links on every network, paid from any network (4440965)
+- Open amounts, merchant fees, route minimums, payer receipts and per-link limits (576d969)
+- Settle deposit-network links on test networks in a sandbox (8ce142c)
+- Settle payment links on the XRP Ledger testnet (1ac60ce)
+- Settle payment links on the Sui testnet (226816b)
+- Settle payment links on the NEAR testnet (90a38b5)
+- Settle payment links on the Aptos testnet (3ee38ab)
+- Settle payment links natively on Circle's Arc (1c66a4a)
+
+### Bug Fixes
+- Pay a request only in its own currency (306e916)
+- Cap open deposits per client, atomically (bd72a2c)
+- Keep a per-link ceiling beside the per-client cap (e046316)
+- A refilling per-link creation budget, not a link cap (414e239)
+- Bind the payer email to its client, bound receipts, keep deposits on their tier (a473851)
+- One payer email per checkout session, never per link (24959fa)
+- Only a proof decides who gets the receipt and the customer link (d9eaa94)
+- Late or shared proofs do not count for the receipt (64588aa)
+- Fail closed without the chain time, one margin for proofs (5cbe1fb)
+- No chain time for a forwarder sweep, and never a forward as proof (fd77bc5)
+- Say why Starknet is not settled yet (dfdb193)
+- Stop settling on Scroll, whose test network was shut down (ef2bff6)
+- Never order one bank transfer deposit twice after a crash (f311b1d)
+- Default payment request methods to p2p in the migration (53b63fd)
+- Read a blank KOYWE_MIN_ARS or KOYWE_MAX_ARS as unset (405f14d)
+- Answer bank transfer instructions 200 for every document (853f583)
+- Settle direct orders on read, budget sign-ins, expire processing (fd282f7)
+- Patch effect, minimatch and glob; in-range updates (596b0de)
+- A registered account no longer proves who paid (c84bdf9)
+- A reverted EVM transaction never fails an intent (9b52c64)
+- Refuse Arc links without deposit addresses, harden the relayer (94d298c)
+
+### Refactor
+- Move the CUIT check digit to the core (651ad8c)
+- Settle through one ledger per kind of test network (c074899)
+
+### Documentation
+- The XRP Ledger, NEAR, Sui and Aptos test networks, and Scroll's shutdown (db04d9f)
+
+### Testing
+- A sandbox deposit is stored as testnet and followed by the sandbox observer alone (6feb7ae)
+- Deposits belong to a checkout session in the settler's fixture (47ff43b)
+- Always change the character the tamper test flips (ab72cb4)
+- A production key's catalog reports Arc unavailable without its relayer (6276b07)
+
 ## [1.15.1] - 2026-11-11
 
 ### Bug Fixes
