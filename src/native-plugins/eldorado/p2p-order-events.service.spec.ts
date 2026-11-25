@@ -3,8 +3,10 @@ import { createSign, generateKeyPairSync } from 'node:crypto';
 import { ApiErrorCode } from '@/common/errors/api-error';
 import type { EldoradoClient } from '@/native-plugins/eldorado/eldorado.client';
 import { P2pOrderEventsService } from '@/native-plugins/eldorado/p2p-order-events.service';
+import { P2pPaymentRequestLedger } from '@/native-plugins/eldorado/p2p-payment-request-ledger.service';
 import { P2pWebhookKeys } from '@/native-plugins/eldorado/p2p-webhook-keys.service';
 import { webhookBodyHash } from '@/native-plugins/eldorado/p2p-webhook-signature';
+import { PaymentRequestRails } from '@/payment-request-rails/payment-request-rails';
 
 const RECIPIENT = '0x52908400098527886E0F7030069857D2E4169EE7';
 const USDT0 = '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9';
@@ -125,6 +127,7 @@ function setup(sessions: Row[], requestExtra: Row = {}) {
         paidAmount: null,
         paidTxHash: null,
         paidSessionId: null,
+        processingSessionId: null,
         ...requestExtra,
       },
     ]),
@@ -132,6 +135,7 @@ function setup(sessions: Row[], requestExtra: Row = {}) {
   const service = new P2pOrderEventsService(
     prisma as never,
     new P2pWebhookKeys(client as unknown as EldoradoClient),
+    new P2pPaymentRequestLedger(prisma as never, new PaymentRequestRails()),
   );
   return {
     service,
@@ -395,6 +399,92 @@ describe('P2pOrderEventsService', () => {
 
       expect(sessions[0].providerStatus).toBe('COMPLETED');
       expect(prisma.p2pPaymentRequest.updateMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('a direct order (paid from the payer’s page)', () => {
+    /** Its session, as the direct flow records it: the order id, and a reference of its own. */
+    const directSession = (id: string, extra: Row = {}) =>
+      session(id, { providerOrderId: `ord-${id}`, ...extra });
+    /** The order names its payment request, not the session. */
+    const directOrder = (id: string, status: string, extra: Row = {}) =>
+      order('creq1', status, { apiOrderId: `ord-${id}`, ...extra });
+
+    it('is matched to its session by the order id, under its payment request', async () => {
+      const { service, sessions } = setup([directSession('d1')]);
+
+      await service.receive(delivery(directOrder('d1', 'ACCEPTED')));
+
+      expect(sessions[0]).toMatchObject({
+        providerStatus: 'ACCEPTED',
+        providerOrderId: 'ord-d1',
+      });
+    });
+
+    it('pays the request when it completes', async () => {
+      const { service, request } = setup([directSession('d1')], {
+        status: 'processing',
+        processingSessionId: 'd1',
+      });
+
+      await service.receive(delivery(directOrder('d1', 'COMPLETED')));
+
+      expect(request).toMatchObject({
+        status: 'paid',
+        paidMethod: 'p2p',
+        paidSessionId: 'd1',
+        paidAmount: '9.95',
+      });
+    });
+
+    it('ignores an order whose id no session of that request recorded', async () => {
+      const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+      const { service, sessions, request } = setup([directSession('d1')]);
+
+      await service.receive(
+        delivery(directOrder('d1', 'COMPLETED', { apiOrderId: 'ord-other' })),
+      );
+
+      expect(sessions[0].providerStatus).toBeNull();
+      expect(request.status).toBe('open');
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('names no session'),
+      );
+      warn.mockRestore();
+    });
+
+    it('reopens the request when THE order that made it processing is cancelled', async () => {
+      const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+      const { service, request } = setup(
+        [directSession('d1'), directSession('d2')],
+        { status: 'processing', processingSessionId: 'd1' },
+      );
+
+      // Another order of the same request: the request stays processing.
+      await service.receive(delivery(directOrder('d2', 'CANCELLED')));
+      expect(request.status).toBe('processing');
+
+      // A dispute keeps it processing too.
+      await service.receive(delivery(directOrder('d1', 'DISPUTED')));
+      expect(request.status).toBe('processing');
+
+      await service.receive(delivery(directOrder('d1', 'CANCELLED')));
+      expect(request).toMatchObject({
+        status: 'open',
+        processingSessionId: null,
+      });
+      warn.mockRestore();
+    });
+
+    it('never reopens a request a bank transfer or a completion took', async () => {
+      const { service, request } = setup([directSession('d1')], {
+        status: 'processing',
+        processingSessionId: null,
+      });
+
+      await service.receive(delivery(directOrder('d1', 'CANCELLED')));
+
+      expect(request.status).toBe('processing');
     });
   });
 });

@@ -4,6 +4,7 @@ import type {
   P2pPaymentMethod,
   P2pToken,
 } from '@/native-plugins/eldorado/p2p-market';
+import { p2pDirectAvailable } from '@/native-plugins/eldorado/p2p-direct';
 import { estimateAmountOut } from '@/native-plugins/eldorado/p2p-market';
 import {
   PAYMENT_REQUEST_METHODS,
@@ -128,6 +129,8 @@ export interface PublicP2pPaymentRequest {
   estimatedAmountOut: string | null;
   paymentMethods: P2pPaymentMethod[];
   methods: PaymentRequestMethod[];
+  /** `p2p` is paid inside the payer's page (the direct flow), not in the window. */
+  p2pDirect: boolean;
   expiresAt: string;
   createdAt: string;
   paidAt: string | null;
@@ -139,13 +142,16 @@ export interface PublicP2pPaymentRequest {
  * seller's address and the payment), it answers exactly these fields. The
  * estimate and the payment methods come from the live market (`live`), so they
  * follow the price while the page is open; both are empty when it cannot be read.
- * `methods` (the rails that can pay it now) is the caller's to compute.
+ * `methods` (the rails that can pay it now) is the caller's to compute;
+ * `directOn` is whether this deployment serves the direct flow at all, which
+ * `p2pDirect` narrows to the request ({@link p2pDirectAvailable}).
  */
 export function toPublicPaymentRequest(
   row: PayerRow,
   live: LiveBuyTerms,
   methods: PaymentRequestMethod[],
   now: Date,
+  directOn: boolean,
 ): PublicP2pPaymentRequest {
   return {
     id: row.id,
@@ -170,6 +176,10 @@ export function toPublicPaymentRequest(
       ? live.currency.paymentMethods.map((m) => ({ id: m.id, name: m.name }))
       : [],
     methods,
+    p2pDirect: p2pDirectAvailable(directOn, {
+      currency: row.currency,
+      methods,
+    }),
     expiresAt: row.expiresAt.toISOString(),
     createdAt: row.createdAt.toISOString(),
     paidAt: row.paidAt ? row.paidAt.toISOString() : null,

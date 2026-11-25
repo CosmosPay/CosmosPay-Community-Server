@@ -14,6 +14,10 @@ import {
   P2P_PAYMENT_REQUEST_DEFAULT_MINUTES,
 } from '@/native-plugins/eldorado/eldorado.constants';
 import {
+  directConfigured,
+  p2pDirectAvailable,
+} from '@/native-plugins/eldorado/p2p-direct';
+import {
   estimateAmountOut,
   type P2pCurrency,
   type P2pToken,
@@ -312,6 +316,7 @@ export class P2pPaymentRequestsService {
       live ?? { currency: null, token: null },
       methods,
       new Date(),
+      this.directOn,
     );
   }
 
@@ -408,6 +413,11 @@ export class P2pPaymentRequestsService {
     );
   }
 
+  /** Whether this deployment serves the direct flow at all (its ids and its session secret). */
+  private get directOn(): boolean {
+    return directConfigured(this.config.get('eldorado', { infer: true }));
+  }
+
   /**
    * The local id of a request's owner, for the rails only (never answered):
    * loaded on its own, apart from the payer's projection, and only when another
@@ -475,12 +485,16 @@ export class P2pPaymentRequestsService {
    * A request as its seller reads it, field by field: the link to show (`url`,
    * the payer's page) and its QR, derived and never stored, the status it
    * reads as at `now`, and the rails that can pay it now (the market is not
-   * read here: `p2p` is as stored at creation).
+   * read here: `p2p` is as stored at creation), with `p2pDirect` from them.
    */
   private async sellerView(row: SellerRow, ownerId: string, now = new Date()) {
     const url = paymentRequestUrl(
       this.config.get('paymentIntents', { infer: true }).checkoutUrl,
       row.id,
+    );
+    const methods = await this.methodsOf(
+      { ...row, ownerId, network: row.network as StellarNetwork },
+      storedMethods(row.methods).includes('p2p'),
     );
     return {
       id: row.id,
@@ -495,10 +509,11 @@ export class P2pPaymentRequestsService {
       address: row.address,
       description: row.description,
       estimatedAmountOut: row.estimatedAmountOut,
-      methods: await this.methodsOf(
-        { ...row, ownerId, network: row.network as StellarNetwork },
-        storedMethods(row.methods).includes('p2p'),
-      ),
+      methods,
+      p2pDirect: p2pDirectAvailable(this.directOn, {
+        currency: row.currency,
+        methods,
+      }),
       url,
       qr: await sep7Qr(url),
       expiresAt: row.expiresAt.toISOString(),

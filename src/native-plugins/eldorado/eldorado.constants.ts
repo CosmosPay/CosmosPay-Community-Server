@@ -446,4 +446,171 @@ export const P2P_WEBHOOK_EVENT = 'ORDER_STATUS_CHANGED';
 
 /** The order status that means the token was delivered, and the order type of a purchase. */
 export const P2P_ORDER_COMPLETED = 'COMPLETED';
+/** The order status of a cancelled order (by its buyer, its seller or a timeout). */
+export const P2P_ORDER_CANCELLED = 'CANCELLED';
 export const P2P_ORDER_TYPE_BUY = 'BUY';
+
+// --- the direct flow: a payment request paid from the payer's page --------
+//
+// The payer never sees the marketplace: they verify once (email code, phone,
+// ID document) and are told whom to transfer the exact amount to, inside our
+// page, while this service drives the marketplace's API for them under the API
+// referral id. The marketplace stays the counterparty (the payer is its client
+// and it runs their verification); the token goes straight to the seller.
+
+/** The one currency the direct flow serves: Argentina's bank transfers. */
+export const P2P_DIRECT_CURRENCY = 'ARS';
+
+/** The marketplace's ARS payment method: a transfer from a CVU/CBU or an alias. */
+export const P2P_DIRECT_PAYMENT_METHOD = 'bank_tx_ar';
+
+/** The country of residence the first verification level sends: always Argentina here. */
+export const P2P_DIRECT_COUNTRY = 'AR';
+
+/** Argentina's calling code, which every phone the first verification level sends starts with. */
+export const P2P_DIRECT_PHONE_PREFIX = '+54';
+
+/**
+ * The banks (and wallets) the marketplace takes for an ARS account, by its
+ * `bankId`, as its payment method schema listed them on 2026-11-13.
+ */
+export const P2P_DIRECT_BANKS = [
+  'mercado_pago',
+  'galicia',
+  'santander',
+  'macro',
+  'bbva',
+  'nacion',
+  'ciudad',
+  'provincia',
+  'patagonia',
+  'supervielle',
+  'credicoop',
+  'comafi',
+  'hsbc',
+  'citibank',
+  'icbc',
+  'itau',
+  'brubank',
+  'wilobank',
+  'uala',
+  'naranja_x',
+  'lemon',
+  'belo',
+  'prex',
+  'industrial',
+] as const;
+
+/** The languages the sign-in email is written in; anything else asks for Spanish. */
+export const P2P_DIRECT_LANGUAGES = ['es', 'en', 'pt'] as const;
+export const P2P_DIRECT_DEFAULT_LANGUAGE = 'es';
+
+/**
+ * The verification level the marketplace lets a buyer trade at (L2, an ID
+ * document: USD 10,000 a month). L3 and above only raise the limit.
+ */
+export const P2P_DIRECT_TRADING_LEVEL = 2;
+
+/** The header the payer's page sends its sealed session in (Node lower-cases it). */
+export const P2P_DIRECT_SESSION_HEADER = 'x-payer-session';
+
+/** HKDF purpose of the sealed session, so no other sealed box opens as one. */
+export const P2P_DIRECT_SESSION_PURPOSE = 'p2p-direct-session v1';
+
+/**
+ * The longest a payer session lives, whatever the marketplace's token allows:
+ * two hours covers verifying and paying one request, and a session that leaks
+ * from a shared computer stops working soon after. Past it the payer verifies
+ * their email again.
+ */
+export const P2P_DIRECT_SESSION_MAX_MS = 2 * 60 * 60 * 1000;
+
+/** Longest session header read; a sealed marketplace token is well under it. */
+export const P2P_DIRECT_SESSION_MAX_CHARS = 8192;
+
+/**
+ * Prefix of the username a new marketplace account is given when the
+ * marketplace demands one at sign-up (it usually does not): followed by random
+ * letters and digits, never anything about the payer.
+ */
+export const P2P_DIRECT_USERNAME_PREFIX = 'cp';
+
+/**
+ * Starting a sign-in emails the payer a code (and may open an account), with
+ * no API key in front: five a minute per address is a typo and a retry.
+ */
+export const P2P_DIRECT_LOGIN_RATE_LIMIT = {
+  name: 'payment-links-fiat:direct-login',
+  limit: 5,
+  windowMs: 60 * 1000,
+};
+
+/** Checking a code: room for typos, not for guessing (the marketplace locks the account too). */
+export const P2P_DIRECT_VERIFY_RATE_LIMIT = {
+  name: 'payment-links-fiat:direct-verify',
+  limit: 10,
+  windowMs: 60 * 1000,
+};
+
+/**
+ * The reads the page polls while the payer verifies (every 5 s) or waits for
+ * a seller (every 4 s), with room for a reload.
+ */
+export const P2P_DIRECT_READ_RATE_LIMIT = {
+  name: 'payment-links-fiat:direct-read',
+  limit: 30,
+  windowMs: 60 * 1000,
+};
+
+/** The steps that change something at the marketplace: verification data, orders, paid, cancel. */
+export const P2P_DIRECT_WRITE_RATE_LIMIT = {
+  name: 'payment-links-fiat:direct-write',
+  limit: 30,
+  windowMs: 60 * 1000,
+};
+
+/**
+ * Sign-in codes mailed to ONE email address, from every client and every
+ * charge together. The per-address budget above does not stop a caller who
+ * rotates addresses (or charges) from mailing one inbox without end; five an
+ * hour is a payer asking again after a typo or a slow inbox. Counted under an
+ * HMAC of the address (`loginEmailSubject`), never the address.
+ */
+export const P2P_DIRECT_LOGIN_EMAIL_BUDGET = {
+  name: 'payment-links-fiat:direct-login-email',
+  limit: 5,
+  windowMs: 60 * 60 * 1000,
+};
+
+/**
+ * Sign-in codes started for ONE payment request, from every client together.
+ * A charge has one payer, so twenty in ten minutes is far beyond honest use,
+ * and spending it delays that charge's payer for minutes at most: a refilling
+ * budget, never a cap that locks the real payer out.
+ */
+export const P2P_DIRECT_LOGIN_REQUEST_BUDGET = {
+  name: 'payment-links-fiat:direct-login-request',
+  limit: 20,
+  windowMs: 10 * 60 * 1000,
+};
+
+/** HKDF purpose of the key the sign-in email budget's HMAC is computed under. */
+export const P2P_DIRECT_LOGIN_BUDGET_PURPOSE = 'p2p-direct-login-budget v1';
+
+/**
+ * How long past its order's due time a charge stays `processing` because its
+ * payer said they transferred, when the marketplace neither completes nor
+ * cancels that order. Transfers between Argentine accounts are instant and a
+ * seller normally confirms within the order's own window, so a day is a seller
+ * who checks once a day, not one who is late by minutes. Past it the charge is
+ * open again (`P2pDirectProcessingSweepService`): a payer who marks paid without
+ * paying no longer freezes it. A completion that still arrives later pays it
+ * whatever it reads as.
+ */
+export const P2P_DIRECT_PROCESSING_GRACE_MS = 24 * 60 * 60 * 1000;
+
+/** How often the sweep looks for charges past that deadline. */
+export const P2P_DIRECT_PROCESSING_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+
+/** Charges reopened per sweep cycle at most; the next cycle takes the rest. */
+export const P2P_DIRECT_PROCESSING_SWEEP_BATCH = 100;

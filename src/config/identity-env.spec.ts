@@ -36,6 +36,16 @@ describe('assertIdentityConfigConsistent', () => {
     ).not.toThrow();
   });
 
+  /* It seals a payer's marketplace session: one leak must not break the gateway too. */
+  it('refuses a P2P direct session secret shared with the gateway', () => {
+    expect(() =>
+      assertIdentityConfigConsistent({
+        APISIX_GATEWAY_SECRET: secret('g'),
+        P2P_DIRECT_SESSION_SECRET: secret('g'),
+      }),
+    ).toThrow(/P2P_DIRECT_SESSION_SECRET and APISIX_GATEWAY_SECRET/);
+  });
+
   /* It used to fall back to the gateway secret, which the platform also holds. */
   it('requires a session secret of its own once a sign-in door exists', () => {
     const env = {

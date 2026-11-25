@@ -1,4 +1,5 @@
 import {
+  P2P_ORDER_CANCELLED,
   P2P_ORDER_COMPLETED,
   P2P_ORDER_TYPE_BUY,
   P2P_WEBHOOK_EVENT,
@@ -21,7 +22,10 @@ export interface P2pOrderEvent {
   status: string;
   /** `BUY` or `SELL`, or null when absent. */
   type: string | null;
-  /** `externalReferenceId`: a session's `reference` (`cp-<uuid>`). */
+  /**
+   * `externalReferenceId`: a widget session's `reference` (`cp-<uuid>`), or
+   * the payment request's id for a direct order.
+   */
   reference: string | null;
   /** `cryptoDetails`: where the token went, on which chain, which token. */
   recipientAddress: string | null;
@@ -129,6 +133,11 @@ export function readOrderEvent(body: unknown): P2pOrderEvent | null {
 /** Whether the order reports the token delivered. */
 export function isCompleted(order: P2pOrderEvent): boolean {
   return order.status === P2P_ORDER_COMPLETED;
+}
+
+/** Whether the order reports it was cancelled (by the payer, the seller or a timeout). */
+export function isCancelled(order: P2pOrderEvent): boolean {
+  return order.status === P2P_ORDER_CANCELLED;
 }
 
 /** A session as the webhook compares an order with it. */

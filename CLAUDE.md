@@ -615,7 +615,8 @@ Each of these was a real finding in this codebase, not a hypothetical:
   platform + resolver key pair still drains every auto-policy payment), and the
   contract id a buyer pays into is derived from the deploy the platform signed,
   never read from Trustless Work's answer.
-- **A P2P payment request turns `paid` only on the marketplace's signed webhook.**
+- **A P2P payment request turns `paid` only on what the marketplace itself says: its
+  signed webhook, or its answer to this service's own read of a direct order.**
   `POST /v1/onramp/p2p/webhooks` (`@Public()`, out of the contract) checks
   `sha256(rawBody)` against `x-webhook-hash`, then the RSA signature of that hex
   against each network's JWKS (`P2pWebhookKeys`): the network whose key verifies is
@@ -628,6 +629,32 @@ Each of these was a real finding in this codebase, not a hypothetical:
   (`toPublicPaymentRequest`), never the owner, the seller's address, the record token,
   sessions or hashes; the purchase they open belongs to the request's consumer, and
   the stored `sharedPublicKey` decides its referral id.
+- **A direct P2P order is bounded by its payment request, and the payer's marketplace
+  token never rests here.** The keyless `/v1/payment-links/fiat/{id}/direct/*`
+  (`P2pDirectService`) opens an order only for the request's own amount, token, chain
+  and address, with the request id as `externalReferenceId`, and reads, marks paid or
+  cancels one only when its `externalReferenceId` is that request (else the 404 of a
+  missing order). The payer's bearer token travels only sealed in `X-Payer-Session`
+  (`p2p-direct-session.ts`: AES-256-GCM under `P2P_DIRECT_SESSION_SECRET`, bound to the
+  request and its network, two hours at most). Nothing about the payer (email, name,
+  account, document, token) is stored or logged: every call is `requestUpstreamJson`
+  with `personalData`, which logs a refusal by its key names and error code only and
+  hands it back for `directRefusal` to map, never relaying the marketplace's text. The
+  webhook finds a direct order's session by `providerOrderId` under its
+  `paymentRequestId`; a CANCELLED order reopens its request only when
+  `processingSessionId` names that session, and a bank transfer's `markProcessing`
+  clears the field, so money that arrived is never reopened. A read of a direct order
+  (through the payer's session, from the marketplace's API, never a value the payer
+  sent) that finds it COMPLETED or CANCELLED goes through the webhook's own
+  `P2pOrderEventsService.apply`, `completionProblem` included; never a second settle
+  path. Marking an order paid sets `processingUntil` (its due time plus
+  `P2P_DIRECT_PROCESSING_GRACE_MS`), and `P2pDirectProcessingSweepService` reopens a
+  request still `processing` past it: the order cannot be read without the payer's
+  token, which is never stored. The sign-in that emails a code is budgeted per email
+  address (an HMAC under a key derived from `P2P_DIRECT_SESSION_SECRET`,
+  `loginEmailSubject`) and per request through `RateLimitService`, beside the route's
+  per-client budget: an address budget alone let anyone rotating addresses mail one
+  inbox without end.
 - **A bank transfer moves a payment request only on the partner's signed webhook, and
   only to the transfer that deposit names** (native plugin `koywe`). `POST
   /v1/onramp/transfer/webhooks` checks `Koywe-Signature` (HMAC-SHA256 of the raw body)
@@ -666,7 +693,8 @@ invites a wallet to register where it was not meant to. `src/config/identity-env
 refuses to boot a recovery server holding `WALLET_RECOVERY_SPONSOR_SECRET` or
 `APISIX_ADMIN_KEY`, and any deployment where two boundary secrets
 (`APISIX_GATEWAY_SECRET`, `WALLET_AUTH_SESSION_SECRET`, `APISIX_ADMIN_KEY`,
-`WALLET_BACKUP_ENCRYPTION_KEY`, `RECOVERY_JWT_SECRET`) share a value. Do not relax
+`WALLET_BACKUP_ENCRYPTION_KEY`, `RECOVERY_JWT_SECRET`, `P2P_DIRECT_SESSION_SECRET`)
+share a value. Do not relax
 either: the two servers' independence IS the design, and a shared value is one leak
 that breaks two boundaries.
 
