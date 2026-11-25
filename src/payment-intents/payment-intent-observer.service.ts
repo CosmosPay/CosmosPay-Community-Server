@@ -28,7 +28,7 @@ type ObservedIntent = PaymentIntent & { consumer: { apisixUsername: string } };
  * PENDING intents and asks the intent's chain verifier whether a matching
  * payment has landed — by the reported transaction when present, otherwise by
  * looking for it: payments to the destination on Stellar, the reference key's
- * transactions on Solana, the token's transfer logs on Monad. On a
+ * transactions on Solana, the token's transfer logs on Monad and Arc. On a
  * confirmed match it finalizes the intent (status + txHash) and the webhook
  * event fires automatically, so integrators are notified without polling us.
  * An intent past its lifetime is asked the same question once more before it
@@ -298,7 +298,7 @@ export class PaymentIntentObserverService extends ScheduledJob {
    * not a 404) the verifier rethrows, and an intent that throws on every tick
    * would never expire.
    *
-   * A scan that pages through blocks (Monad) reports where it stopped, and the
+   * A scan that pages through blocks (Monad, Arc) reports where it stopped, and the
    * intent keeps it, so the next tick resumes there rather than at the start.
    */
   private async verify(intent: PaymentIntent): Promise<VerificationResult> {

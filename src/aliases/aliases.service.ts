@@ -112,7 +112,7 @@ export class AliasesService {
 
     const nonce = randomBytes(24).toString('base64url');
     const expiresAt = new Date(Date.now() + ALIAS_CHALLENGE_TTL_MS);
-    // Stored and signed in the chain's one spelling (EIP-55 on Monad), so the
+    // Stored and signed in the chain's one spelling (EIP-55 on Monad and Arc), so the
     // address a payer later resolves is the address that signed, byte for byte.
     const { chain, address } = addressOf(dto);
 
@@ -512,7 +512,8 @@ export class AliasesService {
   /**
    * Which aliases point at an address? Public for the same reason resolution
    * is. The chain is read off the address's own shape when not named — a G…,
-   * a 0x… and a base58 key cannot be mistaken for one another — and a Monad
+   * a 0x… and a base58 key cannot be mistaken for one another (a 0x… is read as
+   * Monad, the first EVM chain; Arc is named with `chain`), and a Monad
    * address is matched in its stored EIP-55 spelling whatever case it came in.
    */
   async findByAddress(address: string, network?: string, chain?: Chain) {
@@ -909,7 +910,7 @@ function emailMatches(stored: string, provided: string): boolean {
 
 /**
  * The chain and address a request names, in the chain's stored spelling
- * (EIP-55 on Monad). A request that names no chain is Stellar.
+ * (EIP-55 on Monad and Arc). A request that names no chain is Stellar.
  */
 function addressOf(dto: { chain?: Chain; address: string }): {
   chain: Chain;

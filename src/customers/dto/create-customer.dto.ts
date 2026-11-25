@@ -61,7 +61,8 @@ export class CreateCustomerDto {
     description:
       'Deprecated: use `wallets`. One wallet, its chain read from its shape: a Stellar ' +
       'account (G..., checksum verified), a Solana address (base58, 32 bytes) or a Monad ' +
-      'address (0x + 40 hex, any case; stored EIP-55 checksummed). It is added to `wallets`.',
+      'address (0x + 40 hex, any case; stored EIP-55 checksummed; a 0x address is read as ' +
+      'Monad: add an Arc wallet through `wallets` with `chain: arc`). It is added to `wallets`.',
   })
   @IsOptional()
   @IsAnyChainAddress()

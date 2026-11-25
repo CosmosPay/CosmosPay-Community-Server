@@ -21,3 +21,12 @@ describe('transaction ids per chain', () => {
     expect(normalizeTxId('solana', SOLANA)).toBe(SOLANA);
   });
 });
+
+describe('transaction ids on Arc', () => {
+  it('takes an EVM hash, stored lowercase, and nothing else', () => {
+    expect(isTxIdFor('arc', MONAD)).toBe(true);
+    expect(isTxIdFor('arc', STELLAR)).toBe(false);
+    expect(isTxIdFor('arc', SOLANA)).toBe(false);
+    expect(normalizeTxId('arc', MONAD)).toBe(MONAD.toLowerCase());
+  });
+});

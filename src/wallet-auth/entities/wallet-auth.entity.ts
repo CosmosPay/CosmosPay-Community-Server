@@ -171,7 +171,7 @@ class WalletBackupEntity {
   chain!: string;
   @ApiProperty({
     description:
-      'The account this box restores to, on `chain` (Stellar G…, Solana base58, Monad 0x…).',
+      'The account this box restores to, on `chain` (Stellar G…, Solana base58, Monad and Arc 0x…).',
   })
   address!: string;
   @ApiProperty({
@@ -380,7 +380,7 @@ export class WalletBackupUpdatedEntity {
   chain!: string;
   @ApiProperty({
     description:
-      'The account whose box was replaced, on `chain` (Stellar G…, Solana base58, Monad 0x…).',
+      'The account whose box was replaced, on `chain` (Stellar G…, Solana base58, Monad and Arc 0x…).',
   })
   address!: string;
   @ApiProperty({

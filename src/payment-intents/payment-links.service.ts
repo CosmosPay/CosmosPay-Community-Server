@@ -4,13 +4,15 @@ import type { Prisma } from '@generated/prisma/client';
 import { CHAIN_ADDRESS_RULES } from '@/chains/chain-address';
 import { isChain } from '@/chains/chains.constants';
 import { acceptsCrossChainPayment } from '@/payment-intents/payment-deposit-rules';
-import { CROSS_CHAIN_NETWORKS } from '@/cross-chain-swaps/cross-chain-networks';
 import {
   newPayerToken,
   payerTokenHash,
 } from '@/payment-intents/payment-payer-session';
 import type { PayerSessionEntity } from '@/payment-intents/entities/payment-deposit.entity';
-import { isPaymentNetwork } from '@/payment-intents/payment-networks';
+import {
+  isPaymentNetwork,
+  PAYMENT_NETWORK_RULES,
+} from '@/payment-intents/payment-networks';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { readMerchantFeeRecord } from '@/common/merchant-fee/merchant-fee';
 import type { AppConfig, StellarNetwork } from '@/config/configuration';
@@ -265,7 +267,7 @@ export class PaymentLinksService {
       select: { chain: true, txHash: true },
     });
     if (!intent || !isPaymentNetwork(intent.chain)) return {};
-    const rules = CROSS_CHAIN_NETWORKS[intent.chain];
+    const rules = PAYMENT_NETWORK_RULES[intent.chain];
     const out: { walletAddress?: string; walletTxHash?: string } = {};
     if (proof.address) {
       if (!rules.address.isValid(proof.address.trim())) {

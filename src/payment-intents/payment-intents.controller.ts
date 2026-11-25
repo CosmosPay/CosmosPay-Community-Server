@@ -159,7 +159,7 @@ export class PaymentIntentsController {
     description:
       'Answers a link and its QR on `chain`, any network payment links settle ' +
       'on: SEP-7 `web+stellar:pay` on Stellar (the default), Solana Pay on ' +
-      "Solana and EIP-681 on Monad, on the key's network (a `prod` key gets " +
+      "Solana and EIP-681 on Monad and Arc, on the key's network (a `prod` key gets " +
       'mainnet, a `dev` key the test networks); on every other network the ' +
       'hosted checkout, where the payer pays a deposit address made for the ' +
       'payment from any network (`amount` required, no `merchantFee` or ' +
@@ -172,10 +172,10 @@ export class PaymentIntentsController {
       '`409 idempotency_conflict`. Emits `PAYMENT_INTENT_CREATED`.',
   })
   @ApiCreatedResponse({ type: PayPaymentIntentEntity })
-  // A Solana or Monad intent reads its token's decimals (and Monad's head
-  // block) from the chain before it is stored; a link on another network reads
+  // A Solana, Monad or Arc intent reads its token's decimals (and the EVM
+  // head block) from the chain before it is stored; a link on another network reads
   // the cross-chain route's token list. A Stellar one calls nobody.
-  @ApiUpstream('Solana', 'Monad', 'Cross-chain route')
+  @ApiUpstream('Solana', 'Monad', 'Arc', 'Cross-chain route')
   @ApiErrorResponse({
     status: 400,
     codes: [
@@ -192,7 +192,9 @@ export class PaymentIntentsController {
       'required). `invalid_amount`: more decimals than the asset has, or not ' +
       'above zero. `invalid_memo`: not a numeric MEMO_ID. ' +
       '`network_unsupported`: with a `dev` key, a network paid through ' +
-      'deposit addresses that the sandbox does not settle yet. ' +
+      'deposit addresses that the sandbox does not settle yet; or Arc on a ' +
+      'deployment that issues no Arc deposit addresses (an Arc link is paid ' +
+      'only to one, `GET /v1/payment-intents/networks` says so). ' +
       '`asset_unsupported`: the cross-chain route does not trade that asset ' +
       "on that network (in the sandbox: not the network's test stablecoin). " +
       '`merchant_fee_unsupported`: a merchant fee on such a network, or on ' +
@@ -262,10 +264,11 @@ export class PaymentIntentsController {
     description:
       'Every payment network, with whether a link can be created there with ' +
       'this key and why not. A `prod` key reaches every network on mainnet; a ' +
-      '`dev` key reaches Stellar, Solana and Monad on their test networks, and ' +
-      'the networks paid through deposit addresses where the sandbox settles ' +
-      'them, each in its test stablecoin (`asset`). Read before offering a ' +
-      'network in a form.',
+      '`dev` key reaches the four chains settled natively (Arc, Monad, Solana, ' +
+      'Stellar) on their test networks, and the networks paid through deposit ' +
+      'addresses where the sandbox settles them, each in its test stablecoin ' +
+      '(`asset`). On either tier Arc is available only where this deployment ' +
+      'issues Arc deposit addresses. Read before offering a network in a form.',
   })
   @ApiOkResponse({ type: PaymentNetworkListEntity })
   listNetworks(
@@ -382,17 +385,18 @@ export class PaymentIntentsController {
     description:
       "Looks `txHash` up on the intent's chain and checks it pays this intent " +
       '(success, destination, asset, amount, memo or reference, age); a match ' +
-      'settles it `SUCCEEDED` and emits `PAYMENT_INTENT_SUCCEEDED`. This ' +
-      "intent's own payment that failed on-chain marks it `FAILED` " +
-      '(`PAYMENT_INTENT_FAILED`); any other mismatch answers `valid: false` ' +
-      'with a `reason` and leaves the status unchanged. An `EXPIRED` intent ' +
+      'settles it `SUCCEEDED` and emits `PAYMENT_INTENT_SUCCEEDED`. A failed ' +
+      'transaction marks it `FAILED` (`PAYMENT_INTENT_FAILED`) only where it ' +
+      "carries the intent's memo or reference (Stellar, Solana); on Monad and " +
+      'Arc it is a mismatch, and any mismatch answers `valid: false` with a ' +
+      '`reason` and leaves the status unchanged. An `EXPIRED` intent ' +
       'still settles on a verified payment, a `SUCCEEDED` one answers as it ' +
       'is without asking the chain, and one transaction settles at most one ' +
       'intent of any consumer (the oldest it pays).',
   })
   @ApiOkResponse({ type: ValidationOutcomeEntity })
   // Reads the transaction back from the intent's chain.
-  @ApiUpstream('Horizon', 'Solana', 'Monad')
+  @ApiUpstream('Horizon', 'Solana', 'Monad', 'Arc')
   @ApiErrorResponse({
     status: 400,
     codes: [
@@ -429,7 +433,7 @@ export class PaymentIntentsController {
   })
   @ApiOkResponse({ type: PaymentIntentEntity })
   // Setting `txHash` verifies it against the chain before it is stored.
-  @ApiUpstream('Horizon', 'Solana', 'Monad')
+  @ApiUpstream('Horizon', 'Solana', 'Monad', 'Arc')
   @ApiErrorResponse({
     status: 400,
     codes: [

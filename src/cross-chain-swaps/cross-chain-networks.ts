@@ -4,11 +4,7 @@ import {
   isSolanaAddress,
   toChecksumAddress,
 } from '@/chains/chain-address';
-import {
-  type Chain,
-  MONAD_CHAIN_IDS,
-  NATIVE_ASSET_CODES,
-} from '@/chains/chains.constants';
+import { MONAD_CHAIN_IDS, NATIVE_ASSET_CODES } from '@/chains/chains.constants';
 import {
   ALEO_ADDRESS_RE,
   ALEO_TX_ID_RE,
@@ -25,6 +21,7 @@ import {
   LTC_BASE58_RE,
   LTC_BECH32_RE,
   NEAR_ACCOUNT_ID_RE,
+  type RouteChain,
   SHORT_HEX_ADDRESS_RE,
   STARKNET_TX_ID_RE,
   SUI_ADDRESS_RE,
@@ -147,9 +144,9 @@ function utxoAddress(
   };
 }
 
-/** One of the three chains this service settles on, with its existing rules. */
+/** One of the chains this service settles on that the route reaches, with its existing rules. */
 function settledChain(
-  chain: Chain,
+  chain: RouteChain,
   name: string,
   txId: CrossChainTxIdRule,
   caseInsensitive: boolean,

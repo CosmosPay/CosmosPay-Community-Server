@@ -64,7 +64,7 @@ export class PublicPaymentLinkEntity {
     example: 'public',
     description:
       'Network tier: `public` (mainnet) or `testnet` (Stellar testnet, ' +
-      'Solana devnet, Monad testnet).',
+      'Solana devnet, Monad testnet, Arc Testnet).',
   })
   network!: string;
 
@@ -84,7 +84,7 @@ export class PublicPaymentLinkEntity {
     example: 'GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO',
     description:
       'The address the payer sends to, always the one inside `uri`. ' +
-      'Stellar and Solana: the merchant’s account. Monad with a relayer: the ' +
+      'Stellar and Solana: the merchant’s account. Monad and Arc with a relayer: the ' +
       'intent’s own deposit address, which forwards the payment to the ' +
       'merchant less `networkFee`. Null on every other network: the payer ' +
       'pays a deposit address made for the payment ' +
@@ -112,7 +112,7 @@ export class PublicPaymentLinkEntity {
     nullable: true,
     example: null,
     description:
-      'Stellar: the issuer. Solana: the SPL mint. Monad: the ERC-20 ' +
+      'Stellar: the issuer. Solana: the SPL mint. Monad and Arc: the ERC-20 ' +
       'contract. Null for the native coin.',
   })
   assetIssuer!: string | null;
@@ -138,7 +138,7 @@ export class PublicPaymentLinkEntity {
       'web+stellar:pay?destination=GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO&amount=25.5&memo=4127759120438726917&memo_type=MEMO_ID&msg=Order+%2324',
     description:
       'The payment link, exactly as the wallet opens it: SEP-7 on Stellar, ' +
-      'Solana Pay on Solana, EIP-681 on Monad, the hosted checkout on every ' +
+      'Solana Pay on Solana, EIP-681 on Monad and Arc, the hosted checkout on every ' +
       'other network. It is the same link the ' +
       'merchant handed out, so it carries what the wallet needs: a SEP-7 ' +
       '`callback` the merchant set and, for a `TX` intent, the unsigned ' +
@@ -166,7 +166,7 @@ export class PublicPaymentLinkEntity {
     example: null,
     description:
       'Deducted before the merchant is paid, in the asset’s units: the ' +
-      'relayer’s fee for forwarding a Monad deposit. Null when nothing is.',
+      'relayer’s fee for forwarding a Monad or Arc deposit. Null when nothing is.',
   })
   networkFee!: string | null;
 
@@ -198,7 +198,8 @@ export class PublicPaymentLinkEntity {
       '(`/v1/payment-links/{id}/deposit-assets`, `/quote`, `/deposits`). ' +
       'Always true on the networks with no wallet link of their own, where it ' +
       'is the way to pay; on Stellar, Solana and Monad, true for a mainnet ' +
-      'link with an amount and no merchant fee.',
+      'link with an amount and no merchant fee; never on Arc, which the ' +
+      'cross-chain route does not reach.',
   })
   crossChainPayment!: boolean;
 

@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { CrossChainSwap, Prisma } from '@generated/prisma/client';
-import { type Chain, isChain } from '@/chains/chains.constants';
+import { isChain } from '@/chains/chains.constants';
 import { formatUnits, parseUnits } from '@/chains/units';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
@@ -43,7 +43,10 @@ import {
   CROSS_CHAIN_NETWORKS,
   depositLink,
 } from '@/cross-chain-swaps/cross-chain-networks';
-import type { CrossChainNetworkId } from '@/cross-chain-swaps/cross-chain-swaps.constants';
+import type {
+  CrossChainNetworkId,
+  RouteChain,
+} from '@/cross-chain-swaps/cross-chain-swaps.constants';
 import { CreateCrossChainSwapDto } from '@/cross-chain-swaps/dto/create-cross-chain-swap.dto';
 import { QueryCrossChainSwapsDto } from '@/cross-chain-swaps/dto/query-cross-chain-swaps.dto';
 import { QuoteCrossChainSwapDto } from '@/cross-chain-swaps/dto/quote-cross-chain-swap.dto';
@@ -127,7 +130,7 @@ export type CrossChainSwapView = Omit<PublicCrossChainSwap, 'merchantFee'> & {
  * three chains have a venue of their own here; on every other network NEAR
  * Intents may swap within the one chain.
  */
-const SAME_CHAIN_VENUES: Record<Chain, string> = {
+const SAME_CHAIN_VENUES: Record<RouteChain, string> = {
   stellar: 'the Stellar DEX',
   solana: 'the Solana swap route',
   monad: 'the Monad swap route',

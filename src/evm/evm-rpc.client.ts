@@ -59,7 +59,7 @@ export interface EvmLogFilter {
 }
 
 /**
- * JSON-RPC access to the EVM chains this service speaks (Monad), per network
+ * JSON-RPC access to the EVM chains this service speaks (Monad, Arc), per network
  * tier. Like the Solana client it refuses a node on the wrong chain: before
  * the first read of a tier it compares `eth_chainId` with the chain's EIP-155
  * id, because that id is written into every payment link and a link that

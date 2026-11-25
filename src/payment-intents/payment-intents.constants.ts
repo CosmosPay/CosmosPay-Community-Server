@@ -74,7 +74,7 @@ export const TX_HASH_RE = /^[0-9a-fA-F]{64}$/;
 /** A Solana transaction signature: 64 bytes in base58, 86–88 characters. */
 export const SOLANA_TX_ID_RE = /^[1-9A-HJ-NP-Za-km-z]{80,90}$/;
 
-/** A Monad (EVM) transaction hash: 0x + 32 bytes in hex. */
+/** An EVM (Monad, Arc) transaction hash: 0x + 32 bytes in hex. */
 export const EVM_TX_ID_RE = /^0x[0-9a-fA-F]{64}$/;
 
 /** A hex transaction id of either shape — the ones stored lowercase. */
