@@ -269,3 +269,16 @@ describe('paidFrom', () => {
     expect(readPaidFrom({ depositId: 1 })).toBeNull();
   });
 });
+
+describe('crossChainPaymentRefusal on Arc', () => {
+  it('refuses every Arc link: the cross-chain route does not reach Arc', () => {
+    const arc = { ...PAYABLE, chain: 'arc', crossChainFeeBps: 0 };
+    expect(crossChainPaymentRefusal(arc)).toBe(
+      'it is paid on its own network only',
+    );
+    expect(acceptsCrossChainPayment(arc)).toBe(false);
+    expect(
+      acceptsCrossChainPayment({ ...arc, network: 'testnet', amount: null }),
+    ).toBe(false);
+  });
+});

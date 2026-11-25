@@ -122,7 +122,10 @@ describe('EvmVerifierService.verifyByHash', () => {
     );
   });
 
-  it('recognises the payer’s own reverted transfer() call as failedOnChain', async () => {
+  it('answers a reverted transfer() as a plain mismatch, never failedOnChain', async () => {
+    // Anyone can revert `transfer(payee, amount)` from an empty account for the
+    // price of gas: nothing in it is this intent's, so it must not make the
+    // intent FAILED, which is terminal.
     const input =
       ERC20_TRANSFER_SELECTOR +
       addressTopic(DEST).slice(2) +
@@ -131,9 +134,38 @@ describe('EvmVerifierService.verifyByHash', () => {
       tx: tx({ input }),
       receipt: receipt({ status: '0x0', logs: [] }),
     });
-    await expect(verifier.verifyByHash(intent(), HASH)).resolves.toMatchObject({
+    const result = await verifier.verifyByHash(intent(), HASH);
+    expect(result).toEqual({
       valid: false,
-      failedOnChain: true,
+      reason: 'Transaction failed on-chain',
+    });
+    expect(result.failedOnChain).toBeUndefined();
+  });
+
+  it('never settles a reverted transaction, whatever its receipt carries', async () => {
+    // A matching Transfer log in a reverted receipt (which a node never
+    // returns) still settles nothing: the status is checked before any match.
+    const { verifier } = make({ receipt: receipt({ status: '0x0' }) });
+    const result = await verifier.verifyByHash(intent(), HASH);
+    expect(result.valid).toBe(false);
+    expect(result.failedOnChain).toBeUndefined();
+  });
+
+  it('answers a reverted native MON payment as a plain mismatch too', async () => {
+    const { verifier } = make({
+      tx: tx({
+        to: DEST.toLowerCase(),
+        value: `0x${(25n * 10n ** 17n).toString(16)}`,
+      }),
+      receipt: receipt({ status: '0x0', logs: [] }),
+    });
+    const result = await verifier.verifyByHash(
+      intent({ asset: 'native', assetIssuer: null, assetDecimals: null }),
+      HASH,
+    );
+    expect(result).toEqual({
+      valid: false,
+      reason: 'Transaction failed on-chain',
     });
   });
 

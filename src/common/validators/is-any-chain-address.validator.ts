@@ -7,7 +7,8 @@ import {
 /**
  * Validates an address on any chain the service settles, for a field that names no chain: the
  * shape decides which of `CHAIN_ADDRESS_RULES` applies (Stellar G... with its StrKey
- * checksum, Solana base58 of 32 bytes, Monad 0x + 40 hex in any case). It only validates;
+ * checksum, Solana base58 of 32 bytes, Monad 0x + 40 hex in any case; Arc's addresses
+ * share Monad's shape and are read as Monad). It only validates;
  * the service stores the address in its chain's spelling (`normalizeAnyChainAddress`), so a
  * Monad address is kept EIP-55 checksummed, as payment intents record a Monad payer.
  */

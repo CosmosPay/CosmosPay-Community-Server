@@ -20,7 +20,8 @@ export class PaymentVerifiers {
     solana: SolanaVerifierService,
     evm: EvmVerifierService,
   ) {
-    this.byChain = { stellar, solana, monad: evm };
+    // One EVM verifier for every EVM chain: it reads the intent's own chain.
+    this.byChain = { stellar, solana, monad: evm, arc: evm };
   }
 
   /**

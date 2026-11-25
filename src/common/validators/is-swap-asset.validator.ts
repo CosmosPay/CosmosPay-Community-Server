@@ -5,15 +5,17 @@ import {
 } from 'class-validator';
 import { isEvmAddress, isSolanaAddress } from '@/chains/chain-address';
 import {
-  type Chain,
-  DEFAULT_CHAIN,
-  isChain,
+  isSwapChain,
   NATIVE_ASSET_CODES,
+  type SwapChain,
 } from '@/chains/chains.constants';
 
-/** How each chain spells a swap asset, and how a refusal describes it. */
+/**
+ * How each chain with a swap venue spells a swap asset, and how a refusal
+ * describes it. Arc has no venue: the `chain` field refuses it first.
+ */
 const SWAP_ASSET_RULES: Record<
-  Chain,
+  SwapChain,
   { isValid(value: string): boolean; message(property: string): string }
 > = {
   // Unchanged from before Solana and Monad: a Stellar asset code.
@@ -33,18 +35,21 @@ const SWAP_ASSET_RULES: Record<
   },
 };
 
-function isNative(chain: Chain, value: string): boolean {
+function isNative(chain: SwapChain, value: string): boolean {
   const lower = value.toLowerCase();
   return (
     lower === 'native' || lower === NATIVE_ASSET_CODES[chain].toLowerCase()
   );
 }
 
-function chainOf(args: ValidationArguments): Chain | undefined {
+/** What a swap request that names no chain means: Stellar (`DEFAULT_CHAIN`). */
+const DEFAULT_SWAP_CHAIN: SwapChain = 'stellar';
+
+function chainOf(args: ValidationArguments): SwapChain | undefined {
   const [chainProp] = args.constraints as [string];
   const value = (args.object as Record<string, unknown>)[chainProp];
-  if (value === undefined || value === null) return DEFAULT_CHAIN;
-  return isChain(value) ? value : undefined;
+  if (value === undefined || value === null) return DEFAULT_SWAP_CHAIN;
+  return isSwapChain(value) ? value : undefined;
 }
 
 /**
@@ -74,7 +79,7 @@ export function IsSwapAsset(
           );
         },
         defaultMessage(args: ValidationArguments) {
-          return SWAP_ASSET_RULES[chainOf(args) ?? DEFAULT_CHAIN].message(
+          return SWAP_ASSET_RULES[chainOf(args) ?? DEFAULT_SWAP_CHAIN].message(
             args.property,
           );
         },

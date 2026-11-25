@@ -15,7 +15,7 @@ const DECIMAL_RE = /^\d+(\.\d+)?$/;
 
 /**
  * The most decimal places a request may write an amount with, per chain.
- * Stellar assets all have 7 (stroops). On Solana and Monad a token can be finer
+ * Stellar assets all have 7 (stroops). On Solana, Monad and Arc a token can be finer
  * than the chain's coin — an ERC-20 may declare 18 whatever the chain — so the
  * DTO admits the widest any token may have, and the service checks the asset's
  * own decimals once it has resolved it.
@@ -24,6 +24,7 @@ const AMOUNT_MAX_PLACES: Record<Chain, number> = {
   stellar: 7,
   solana: MAX_TOKEN_DECIMALS,
   monad: MAX_TOKEN_DECIMALS,
+  arc: MAX_TOKEN_DECIMALS,
 };
 
 function maxPlaces(args: ValidationArguments): number {
@@ -39,7 +40,7 @@ function maxPlaces(args: ValidationArguments): number {
 
 /**
  * A positive decimal string with at most as many places as the object's chain
- * admits: 7 on Stellar (stroops), up to 18 on Solana and Monad, where the
+ * admits: 7 on Stellar (stroops), up to 18 on Solana, Monad and Arc, where the
  * asset's own decimals are checked once it is resolved. A missing chain is
  * Stellar, with the message Stellar amounts always got.
  */

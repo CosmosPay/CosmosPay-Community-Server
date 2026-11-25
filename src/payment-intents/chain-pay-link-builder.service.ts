@@ -6,6 +6,7 @@ import {
   normalizeAddress,
 } from '@/chains/chain-address';
 import {
+  CHAIN_DISPLAY_NAMES,
   MAX_TOKEN_DECIMALS,
   NATIVE_ASSET_CODES,
   NATIVE_DECIMALS,
@@ -27,13 +28,20 @@ import type { StellarNetwork } from '@/config/configuration';
 import { eip681Uri } from '@/evm/eip681';
 import { EvmRpcClient } from '@/evm/evm-rpc.client';
 import {
+  EVM_DIRECT_PAY_LINKS,
+  EVM_NATIVE_TOKEN_INTERFACES,
+  EVM_TOKEN_PRESETS,
+  type EvmChain,
+  isEvmChain,
+} from '@/evm/evm.constants';
+import {
   EvmDepositAddressFactory,
   type EvmDepositTerms,
 } from '@/payment-intents/evm-deposit-address.factory';
 import { solanaPayUri } from '@/solana/solana-pay';
 import { SolanaRpcClient } from '@/solana/solana-rpc.client';
 
-/** What a PAY request on Solana or Monad asks for, after DTO validation. */
+/** What a PAY request on Solana, Monad or Arc asks for, after DTO validation. */
 export interface ChainPayRequest {
   network: StellarNetwork;
   destination: string;
@@ -46,7 +54,7 @@ export interface ChainPayRequest {
   merchantFee?: MerchantFeeDto;
 }
 
-/** The columns a Solana/Monad PAY intent is stored with. */
+/** The columns a Solana, Monad or Arc PAY intent is stored with. */
 export interface ChainPayLink {
   destination: string;
   asset: string;
@@ -57,12 +65,12 @@ export interface ChainPayLink {
   chainCursor: string | null;
   /** What is deducted before the merchant is paid, as a decimal; null for nothing. */
   networkFee: string | null;
-  /** A Monad intent's deposit address and its terms, when the relayer is on. */
+  /** An EVM intent's deposit address and its terms, when the chain's relayer is on. */
   deposit: EvmDepositTerms | null;
   /**
    * The merchant fee, resolved against the asset; null without one. On Solana
    * the link is then a Solana Pay transaction request (`uri` is set by the
-   * service once the id exists); on Monad the deposit address pays it.
+   * service once the id exists); on Monad and Arc the deposit address pays it.
    */
   merchantFee: { terms: MerchantFeeTerms; record: MerchantFeeRecord } | null;
 }
@@ -104,7 +112,8 @@ export class ChainPayLinkBuilder {
   build(chain: OtherChain, request: ChainPayRequest): Promise<ChainPayLink> {
     const builders: Record<OtherChain, () => Promise<ChainPayLink>> = {
       solana: () => this.solanaPay(request),
-      monad: () => this.monadPay(request),
+      monad: () => this.evmPay('monad', request),
+      arc: () => this.evmPay('arc', request),
     };
     return builders[chain]();
   }
@@ -164,14 +173,27 @@ export class ChainPayLinkBuilder {
     };
   }
 
-  /** The destination and token, in the spelling this chain stores them in. */
+  /**
+   * The destination and token, in the spelling this chain stores them in. A
+   * preset (Arc's USDC and EURC, and Arc's native USDC, which is charged
+   * through its ERC-20 interface) is stored as its contract, as `build` stores
+   * it, so a replay compares like with like.
+   */
   normalize(
     chain: OtherChain,
+    network: StellarNetwork,
     request: Pick<ChainPayRequest, 'destination' | 'assetCode' | 'assetIssuer'>,
   ): { destination: string; asset: string; assetIssuer: string | null } {
+    const destination = normalizeAddress(chain, request.destination);
+    const preset = isEvmChain(chain)
+      ? evmPresetOf(chain, network, request.assetCode, request.assetIssuer)
+      : null;
+    if (preset) {
+      return { destination, asset: preset.code, assetIssuer: preset.issuer };
+    }
     const native = isNative(chain, request.assetCode, request.assetIssuer);
     return {
-      destination: normalizeAddress(chain, request.destination),
+      destination,
       asset: native ? 'native' : (request.assetCode ?? '').toUpperCase(),
       assetIssuer:
         native || !request.assetIssuer
@@ -184,7 +206,7 @@ export class ChainPayLinkBuilder {
     const asset = await this.resolveAsset('solana', request, (mint) =>
       this.solana.getMintDecimals(request.network, mint),
     );
-    checkAmount(request.amount, asset, false);
+    checkAmount('solana', request.amount, asset, false);
     const merchant = await this.merchantFee(
       'solana',
       request,
@@ -224,54 +246,75 @@ export class ChainPayLinkBuilder {
     };
   }
 
-  private async monadPay(request: ChainPayRequest): Promise<ChainPayLink> {
+  /**
+   * An EIP-681 link on an EVM chain (Monad, Arc). On Arc the asset is never
+   * the bare coin: USDC is charged through its ERC-20 interface (see
+   * `evmPresetOf`), so the link is a `transfer` on that contract in 6 decimals,
+   * and only to a deposit address: without the relayer an Arc link is refused
+   * (`evmPayLinkRefusal`).
+   */
+  private async evmPay(
+    chain: EvmChain,
+    request: ChainPayRequest,
+  ): Promise<ChainPayLink> {
+    const relayed = this.deposits.isEnabled(chain);
+    // Before any node is asked: a chain whose links need deposit addresses
+    // has none to give without its relayer.
+    const refusal = evmPayLinkRefusal(chain, relayed);
+    if (refusal !== null) {
+      throw ApiError.badRequest(ApiErrorCode.NetworkUnsupported, refusal);
+    }
     if (request.msg !== undefined) {
       throw ApiError.badRequest(
         ApiErrorCode.ValidationFailed,
-        'msg is not supported on monad: an EIP-681 link has no message field.',
+        `msg is not supported on ${chain}: an EIP-681 link has no message field.`,
       );
     }
-    const destination = normalizeAddress('monad', request.destination);
-    const asset = await this.resolveAsset('monad', request, (token) =>
-      this.evm.erc20Decimals('monad', request.network, token),
+    const destination = normalizeAddress(chain, request.destination);
+    const preset = evmPresetOf(
+      chain,
+      request.network,
+      request.assetCode,
+      request.assetIssuer,
     );
-    const chainId = this.evm.chainId('monad', request.network);
-    if (request.merchantFee && !this.deposits.isEnabled('monad')) {
+    const asset =
+      preset ??
+      (await this.resolveAsset(chain, request, (token) =>
+        this.evm.erc20Decimals(chain, request.network, token),
+      ));
+    const chainId = this.evm.chainId(chain, request.network);
+    if (request.merchantFee && !relayed) {
       throw ApiError.badRequest(
         ApiErrorCode.MerchantFeeUnsupported,
-        'A merchant fee on a Monad payment link needs deposit addresses (MONAD_RELAYER_PRIVATE_KEY): ' +
-          'a direct EIP-681 link pays one account.',
+        `A merchant fee on a payment link on ${CHAIN_DISPLAY_NAMES[chain]} needs deposit addresses ` +
+          `(${chain.toUpperCase()}_RELAYER_PRIVATE_KEY): a direct EIP-681 link pays one account.`,
       );
     }
-    return this.deposits.isEnabled('monad')
-      ? this.monadDeposit(request, destination, asset, chainId)
-      : this.monadDirect(request, destination, asset, chainId);
+    return relayed
+      ? this.evmDeposit(chain, request, destination, asset, chainId)
+      : this.evmDirect(chain, request, destination, asset, chainId);
   }
 
   /**
    * With a relayer: the payer pays the intent's own CREATE2 deposit address,
    * so the payment is recognised by where it went rather than by its amount —
-   * native MON included, and an open amount is possible. The relayer later
-   * forwards it to the merchant, less the fee fixed here.
+   * the native coin included, and an open amount is possible. The relayer
+   * later forwards it to the merchant, less the fee fixed here.
    */
-  private async monadDeposit(
+  private async evmDeposit(
+    chain: EvmChain,
     request: ChainPayRequest,
     destination: string,
     asset: ResolvedAsset,
     chainId: number,
   ): Promise<ChainPayLink> {
-    const amount = checkAmount(request.amount, asset, false);
-    const merchant = await this.merchantFee(
-      'monad',
-      request,
-      asset,
-      destination,
-    );
+    const amount = checkAmount(chain, request.amount, asset, false);
+    const merchant = await this.merchantFee(chain, request, asset, destination);
     // What the payer deposits: the amount, plus a merchant fee the payer pays
     // on top. The forwarder pays the fee out of it, then the merchant.
     const value = merchant ? merchant.split.total : amount;
     const deposit = await this.deposits.mint(
-      'monad',
+      chain,
       request.network,
       destination,
       asset.issuer ? { address: asset.issuer, decimals: asset.decimals } : null,
@@ -324,18 +367,20 @@ export class ChainPayLinkBuilder {
   }
 
   /**
-   * Without a relayer: the payer pays the merchant directly. An EVM payment
-   * carries no memo, so the amount is part of what identifies it — an
+   * Without a relayer, on a chain that allows it (Monad, never Arc:
+   * `EVM_DIRECT_PAY_LINKS`): the payer pays the merchant directly. An EVM
+   * payment carries no memo, so the amount is part of what identifies it — an
    * open-amount link could be settled by any transfer.
    */
-  private async monadDirect(
+  private async evmDirect(
+    chain: EvmChain,
     request: ChainPayRequest,
     destination: string,
     asset: ResolvedAsset,
     chainId: number,
   ): Promise<ChainPayLink> {
-    const value = checkAmount(request.amount, asset, true)!;
-    const head = await this.evm.blockNumber('monad', request.network);
+    const value = checkAmount(chain, request.amount, asset, true)!;
+    const head = await this.evm.blockNumber(chain, request.network);
     return {
       destination,
       asset: asset.code,
@@ -402,6 +447,25 @@ export class ChainPayLinkBuilder {
   }
 }
 
+/**
+ * Why a payment link on `chain` cannot be created on this deployment, or null
+ * when it can. A chain whose links are not allowed to pay the merchant
+ * directly (`EVM_DIRECT_PAY_LINKS`: Arc) needs deposit addresses, so it is
+ * refused while its relayer is off. The same answer drives the create and the
+ * networks catalog, so a form never offers a network the create refuses. The
+ * message names no setting: the operator reads that in the README.
+ */
+export function evmPayLinkRefusal(
+  chain: EvmChain,
+  relayed: boolean,
+): string | null {
+  if (relayed || EVM_DIRECT_PAY_LINKS[chain]) return null;
+  return (
+    `Payment links on ${CHAIN_DISPLAY_NAMES[chain]} are not available on this deployment: ` +
+    'each one is paid to an address made for that payment, and this deployment does not issue them.'
+  );
+}
+
 /** Whether a request means the chain's own coin. */
 function isNative(
   chain: OtherChain,
@@ -414,11 +478,45 @@ function isNative(
 }
 
 /**
+ * The asset a request names on an EVM chain by code alone, or null when it
+ * names something else (a contract, or the coin of a chain without an
+ * interface). Arc's native coin is USDC, and a link there charges it through
+ * its ERC-20 interface: `USDC`, `native`, an omitted asset, and `USDC` with the
+ * interface's own address all resolve to that contract in its 6 decimals,
+ * stored under the code `USDC`. `EURC` resolves to the tier's EURC. Any other
+ * code, or a code with another contract, is a token named by its contract.
+ */
+export function evmPresetOf(
+  chain: EvmChain,
+  network: StellarNetwork,
+  assetCode: string | undefined,
+  assetIssuer: string | undefined,
+): ResolvedAsset | null {
+  const presets = EVM_TOKEN_PRESETS[chain][network];
+  const gasCoin = EVM_NATIVE_TOKEN_INTERFACES[chain];
+  const code = assetCode?.toUpperCase();
+  const named =
+    gasCoin && isNative(chain, assetCode, assetIssuer)
+      ? NATIVE_ASSET_CODES[chain]
+      : code;
+  const preset = named !== undefined ? presets[named] : undefined;
+  if (!named || !preset) return null;
+  if (
+    assetIssuer !== undefined &&
+    assetIssuer.toLowerCase() !== preset.address.toLowerCase()
+  ) {
+    return null;
+  }
+  return { code: named, issuer: preset.address, decimals: preset.decimals };
+}
+
+/**
  * The amount in base units, or null for an open amount. Refuses more decimals
  * than the asset has — rounding them away would quietly ask for a different
  * amount — and zero, which settles nothing.
  */
 function checkAmount(
+  chain: OtherChain,
   amount: string | undefined,
   asset: ResolvedAsset,
   required: boolean,
@@ -427,7 +525,7 @@ function checkAmount(
     if (required) {
       throw ApiError.badRequest(
         ApiErrorCode.InvalidAmount,
-        'amount is required on monad without deposit addresses: an EIP-681 ' +
+        `amount is required on ${chain} without deposit addresses: an EIP-681 ` +
           'payment carries no memo, so the amount is part of how it is recognised.',
       );
     }

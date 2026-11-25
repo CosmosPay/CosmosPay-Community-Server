@@ -33,7 +33,7 @@ function ChainField(): PropertyDecorator {
       description:
         'Chain the address is on. Omit for Stellar. Stellar signs the ' +
         'challenge digest (ed25519); Solana signs the challenge text (ed25519, ' +
-        '`signMessage`); Monad signs it with EIP-191 `personal_sign`.',
+        '`signMessage`); Monad and Arc sign it with EIP-191 `personal_sign`.',
     })(target, key);
     IsOptional()(target, key);
     IsIn(CHAINS)(target, key);
@@ -60,7 +60,7 @@ export class CreateAliasChallengeDto {
 
   @ApiProperty({
     description:
-      'The address on `chain`: Stellar G…, Solana base58, Monad 0x….',
+      'The address on `chain`: Stellar G…, Solana base58, Monad and Arc 0x….',
     example: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
   })
   @IsString()
@@ -123,7 +123,7 @@ export class ClaimAliasDto {
   @ApiProperty({
     description:
       'Stellar: base64 ed25519 over the challenge digest. Solana: base64 or ' +
-      'base58 ed25519 over the challenge text. Monad: 0x-hex EIP-191 ' +
+      'base58 ed25519 over the challenge text. Monad and Arc: 0x-hex EIP-191 ' +
       'signature over the challenge text.',
   })
   @IsString()
@@ -151,7 +151,7 @@ export class AddAliasAddressDto {
 
   @ApiProperty({
     description:
-      'The address on `chain`: Stellar G…, Solana base58, Monad 0x….',
+      'The address on `chain`: Stellar G…, Solana base58, Monad and Arc 0x….',
   })
   @IsString()
   @IsChainAddress('chain')
@@ -174,7 +174,7 @@ export class AddAliasAddressDto {
   @ApiProperty({
     description:
       'Stellar: base64 ed25519 over the challenge digest. Solana: base64 or ' +
-      'base58 ed25519 over the challenge text. Monad: 0x-hex EIP-191 ' +
+      'base58 ed25519 over the challenge text. Monad and Arc: 0x-hex EIP-191 ' +
       'signature over the challenge text.',
   })
   @IsString()
@@ -259,7 +259,7 @@ export class CompleteAliasRecoveryDto {
   @ApiProperty({
     description:
       'Stellar: base64 ed25519 over the challenge digest. Solana: base64 or ' +
-      'base58 ed25519 over the challenge text. Monad: 0x-hex EIP-191 ' +
+      'base58 ed25519 over the challenge text. Monad and Arc: 0x-hex EIP-191 ' +
       'signature over the challenge text.',
   })
   @IsString()

@@ -37,19 +37,19 @@ import {
   NATIVE_ASSET_CODES,
 } from '@/chains/chains.constants';
 import {
-  CROSS_CHAIN_NETWORKS,
-  isCrossChainNetworkId,
-} from '@/cross-chain-swaps/cross-chain-networks';
+  isPaymentNetwork,
+  PAYMENT_NETWORK_RULES,
+} from '@/payment-intents/payment-networks';
 import { STELLAR_DECIMALS } from '@/stellar/stellar.constants';
 
 /**
  * The ticker a row is reported under: the network's coin for `native`, on
- * every network a payment link settles on (`CROSS_CHAIN_NETWORKS`).
+ * every network a payment link settles on (`PAYMENT_NETWORK_RULES`).
  */
 function assetLabel(asset: string, chain: string): string {
   if (asset && asset !== 'native') return asset;
-  return isCrossChainNetworkId(chain)
-    ? CROSS_CHAIN_NETWORKS[chain].nativeSymbol
+  return isPaymentNetwork(chain)
+    ? PAYMENT_NETWORK_RULES[chain].nativeSymbol
     : NATIVE_ASSET_CODES.stellar;
 }
 
@@ -68,14 +68,14 @@ function placesFor(chain: string): number {
  * on for every network a payment link settles on. Grouped together with
  * `chain`, so SOL never lands in XLM's row and a token of one name on two
  * chains is two rows. `Prisma.raw` over constants of our own (the network ids
- * and tickers in `CROSS_CHAIN_NETWORKS`), never over anything a caller sent.
+ * and tickers in `PAYMENT_NETWORK_RULES`), never over anything a caller sent.
  */
 const ASSET_LABEL_SQL = Prisma.raw(`
   CASE WHEN "asset" IN ('', 'native') THEN
     CASE "chain"
-${Object.values(CROSS_CHAIN_NETWORKS)
-  .filter((n) => n.id !== 'stellar')
-  .map((n) => `      WHEN '${n.id}' THEN '${n.nativeSymbol}'`)
+${Object.entries(PAYMENT_NETWORK_RULES)
+  .filter(([id]) => id !== 'stellar')
+  .map(([id, n]) => `      WHEN '${id}' THEN '${n.nativeSymbol}'`)
   .join('\n')}
       ELSE '${NATIVE_ASSET_CODES.stellar}'
     END

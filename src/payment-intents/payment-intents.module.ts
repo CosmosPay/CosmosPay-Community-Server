@@ -30,8 +30,8 @@ import { SolanaModule } from '@/solana/solana.module';
 
 @Module({
   // A settled payment adds its payer as a customer, and that table is the
-  // customers module's to write. The dependency runs one way only. Solana and
-  // Monad are reached through their RPC clients, never a URL of our own, and
+  // customers module's to write. The dependency runs one way only. Solana,
+  // Monad and Arc are reached through their RPC clients, never a URL of our own, and
   // the cross-chain route (payments from any network) through its client.
   // Receipts go out through this service's own mailer. The sandbox settles
   // links on test networks, where the cross-chain route does not run.

@@ -279,3 +279,42 @@ describe('valueRows', () => {
     expect(formatUsd(0)).toBe('0.00');
   });
 });
+
+describe('usdPricer on Arc, which the cross-chain route does not list', () => {
+  const ARC_USDC = '0x3600000000000000000000000000000000000000';
+
+  it('prices its presets by contract at their namesake on Ethereum, on both tiers', () => {
+    expect(
+      usdPricer(
+        TOKENS,
+        'public',
+      )({ chain: 'arc', asset: 'USDC', issuer: ARC_USDC }),
+    ).toBe(1);
+    expect(
+      usdPricer(
+        TOKENS,
+        'testnet',
+      )({ chain: 'arc', asset: 'USDC', issuer: ARC_USDC }),
+    ).toBe(1);
+  });
+
+  it('prices no other Arc token, whatever it calls itself', () => {
+    const pricer = usdPricer(TOKENS, 'public');
+    expect(
+      pricer({
+        chain: 'arc',
+        asset: 'USDC',
+        issuer: '0x754704bc059f8c67012fed69bc8a327a5aafb603',
+      }),
+    ).toBeNull();
+    expect(pricer({ chain: 'arc', asset: 'USDC', issuer: null })).toBeNull();
+    // EURC is a preset, but Ethereum's list here has none to price it by.
+    expect(
+      pricer({
+        chain: 'arc',
+        asset: 'EURC',
+        issuer: '0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1',
+      }),
+    ).toBeNull();
+  });
+});

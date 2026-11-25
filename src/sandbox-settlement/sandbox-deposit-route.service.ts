@@ -19,6 +19,7 @@ import type {
 } from '@/payment-intents/payment-deposit-pricing.service';
 import { requestedAmountOut } from '@/payment-intents/payment-deposit-rules';
 import {
+  isRoutedNetwork,
   PAYMENT_NETWORKS,
   type PaymentNetwork,
   paymentNetworkName,
@@ -77,6 +78,13 @@ export class SandboxDepositRoute {
       asset: null,
     });
     if (entry.kind === 'unavailable') return unavailable(entry.reason);
+    // Only a network the route reaches can have a settled entry (Arc's is
+    // `unavailable`); this narrows the type for the asset below.
+    if (!isRoutedNetwork(network)) {
+      throw new Error(
+        `Sandbox entry for ${network} settles a network the route does not reach`,
+      );
+    }
     if (!this.isConfigured()) {
       return unavailable(
         'Sandbox payments from other networks are not set up on this deployment.',

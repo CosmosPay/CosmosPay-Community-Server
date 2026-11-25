@@ -489,6 +489,75 @@ describe('validateEnv', () => {
         }),
         'must not be MONAD_RELAYER_PRIVATE_KEY',
       );
+      expectEnvError(
+        validEnv({
+          SANDBOX_TREASURY_PRIVATE_KEY: KEY,
+          ARC_RELAYER_PRIVATE_KEY: KEY,
+        }),
+        'must not be ARC_RELAYER_PRIVATE_KEY',
+      );
     });
+  });
+});
+
+describe('validateEnv: Arc', () => {
+  it('accepts Arc nodes, a relayer key and token fees', () => {
+    expect(() =>
+      validateEnv(
+        validEnv({
+          ARC_RPC_URL_MAINNET: 'https://rpc.mainnet.arc.io',
+          ARC_RPC_URL_TESTNET: 'https://rpc.testnet.arc.io',
+          ARC_RPC_TIMEOUT_MS: '5000',
+          ARC_LOG_BLOCK_RANGE: '5000',
+          ARC_RELAYER_PRIVATE_KEY: `0x${'ab'.repeat(32)}`,
+          ARC_DEPOSIT_TOKEN_FEES: JSON.stringify({
+            '0x3600000000000000000000000000000000000000': '0.02',
+          }),
+        }),
+      ),
+    ).not.toThrow();
+  });
+
+  it('refuses each malformed Arc setting by name', () => {
+    expectEnvError(
+      validEnv({ ARC_RPC_URL_MAINNET: 'nope' }),
+      'ARC_RPC_URL_MAINNET',
+    );
+    expectEnvError(
+      validEnv({ ARC_LOG_BLOCK_RANGE: '0' }),
+      'ARC_LOG_BLOCK_RANGE',
+    );
+    expectEnvError(
+      validEnv({ ARC_RELAYER_PRIVATE_KEY: '0x1234' }),
+      'ARC_RELAYER_PRIVATE_KEY',
+    );
+    expectEnvError(
+      validEnv({ ARC_DEPOSIT_TOKEN_FEES: '{"0x12": "1"}' }),
+      'ARC_DEPOSIT_TOKEN_FEES',
+    );
+  });
+
+  it('refuses the Monad relayer key as the Arc relayer, in any spelling', () => {
+    const KEY = `0x${'cd'.repeat(32)}`;
+    expectEnvError(
+      validEnv({
+        MONAD_RELAYER_PRIVATE_KEY: KEY,
+        ARC_RELAYER_PRIVATE_KEY: KEY.slice(2).toUpperCase(),
+      }),
+      'ARC_RELAYER_PRIVATE_KEY must not be MONAD_RELAYER_PRIVATE_KEY',
+    );
+  });
+
+  it('accepts two different relayer keys, and either one alone', () => {
+    const monad = `0x${'cd'.repeat(32)}`;
+    const arc = `0x${'ef'.repeat(32)}`;
+    const envs: Record<string, string>[] = [
+      { MONAD_RELAYER_PRIVATE_KEY: monad, ARC_RELAYER_PRIVATE_KEY: arc },
+      { MONAD_RELAYER_PRIVATE_KEY: monad },
+      { ARC_RELAYER_PRIVATE_KEY: arc },
+    ];
+    for (const env of envs) {
+      expect(() => validateEnv(validEnv(env))).not.toThrow();
+    }
   });
 });

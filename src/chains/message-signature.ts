@@ -12,7 +12,7 @@ import type { Chain } from '@/chains/chains.constants';
  *     own public key. A Stellar G… and a Solana base58 address are two spellings
  *     of the same 32-byte key, so the difference is only in how the key and the
  *     signature arrive.
- *   - Monad (EVM): EIP-191 `personal_sign` — keccak-256 over
+ *   - Monad and Arc (EVM): EIP-191 `personal_sign`: keccak-256 over
  *     `"\x19Ethereum Signed Message:\n" + length + message` — verified by
  *     recovering the signer and comparing addresses. The prefix is what makes a
  *     signed message impossible to submit as a transaction, the same guarantee
@@ -94,6 +94,17 @@ export function recoverEvmSigner(
   }
 }
 
+/** An EVM account's EIP-191 `personal_sign` (Monad, Arc): the recovered signer is the address. */
+function verifyEip191(
+  address: string,
+  message: Uint8Array,
+  signature: string,
+): boolean {
+  if (!isEvmAddress(address)) return false;
+  const signer = recoverEvmSigner(message, signature);
+  return signer !== null && signer === address.toLowerCase();
+}
+
 /**
  * How each chain's address signs a message. A `Record` over the chain union,
  * so a new chain does not compile until it says how its wallets sign.
@@ -117,11 +128,8 @@ const MESSAGE_VERIFIERS: Record<
     const key = decodeBase58(address);
     return !!key && verifyEd25519(Buffer.from(key), message, signature);
   },
-  monad: (address, message, signature) => {
-    if (!isEvmAddress(address)) return false;
-    const signer = recoverEvmSigner(message, signature);
-    return signer !== null && signer === address.toLowerCase();
-  },
+  monad: verifyEip191,
+  arc: verifyEip191,
 };
 
 /** Does `signature` prove that `address`, on `chain`, signed `message`? */

@@ -5,7 +5,11 @@ import { CROSS_CHAIN_NETWORK_IDS } from '@/cross-chain-swaps/cross-chain-swaps.c
 import { CreatePayPaymentIntentDto } from '@/payment-intents/dto/create-pay-payment-intent.dto';
 import {
   isDepositNetwork,
+  isRoutedNetwork,
+  PAYMENT_NETWORK_RULES,
   PAYMENT_NETWORKS,
+  paymentAddressRule,
+  paymentNetworkName,
   paymentNetworkOf,
 } from '@/payment-intents/payment-networks';
 
@@ -16,12 +20,44 @@ function errorsOf(body: Record<string, unknown>): string[] {
 }
 
 describe('payment networks', () => {
-  it('are the networks cross-chain swaps reach: one list, not a copy', () => {
-    expect(PAYMENT_NETWORKS).toBe(CROSS_CHAIN_NETWORK_IDS);
-    expect(PAYMENT_NETWORKS.length).toBeGreaterThan(CHAINS.length);
+  it('are every chain, then every other network cross-chain swaps reach: derived, not a copy', () => {
+    expect(PAYMENT_NETWORKS).toEqual([
+      ...CHAINS,
+      ...CROSS_CHAIN_NETWORK_IDS.filter(
+        (id) => !(CHAINS as readonly string[]).includes(id),
+      ),
+    ]);
+    expect(PAYMENT_NETWORKS.slice(0, 4)).toEqual([
+      'stellar',
+      'solana',
+      'monad',
+      'arc',
+    ]);
+    expect(new Set(PAYMENT_NETWORKS).size).toBe(PAYMENT_NETWORKS.length);
+    expect(PAYMENT_NETWORKS.length).toBe(CROSS_CHAIN_NETWORK_IDS.length + 1);
   });
 
-  it('settle through deposits everywhere but Stellar, Solana and Monad', () => {
+  it('has Arc as a native chain the cross-chain route does not reach', () => {
+    expect(PAYMENT_NETWORKS).toContain('arc');
+    expect(CROSS_CHAIN_NETWORK_IDS as readonly string[]).not.toContain('arc');
+    expect(isRoutedNetwork('arc')).toBe(false);
+    expect(isRoutedNetwork('monad')).toBe(true);
+    expect(paymentNetworkOf('arc')).toBe('arc');
+    expect(paymentNetworkName('arc')).toBe('Arc');
+    expect(PAYMENT_NETWORK_RULES.arc.nativeSymbol).toBe('USDC');
+    const rule = paymentAddressRule('arc');
+    expect(rule.caseInsensitive).toBe(true);
+    expect(rule.normalize('0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed')).toBe(
+      '0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed',
+    );
+    const hash = `0x${'AB'.repeat(32)}`;
+    expect(PAYMENT_NETWORK_RULES.arc.txId.isValid(hash)).toBe(true);
+    expect(PAYMENT_NETWORK_RULES.arc.txId.normalize(hash)).toBe(
+      hash.toLowerCase(),
+    );
+  });
+
+  it('settle through deposits everywhere but Stellar, Solana, Monad and Arc', () => {
     for (const network of PAYMENT_NETWORKS) {
       expect(isDepositNetwork(network)).toBe(
         !(CHAINS as readonly string[]).includes(network),
