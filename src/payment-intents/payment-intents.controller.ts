@@ -38,8 +38,19 @@ import {
   ValidationOutcomeEntity,
 } from '@/payment-intents/entities/payment-intent.entity';
 import { PaymentIntentsService } from '@/payment-intents/payment-intents.service';
+import {
+  PaymentDepositListEntity,
+  PaymentPayerEmailListEntity,
+  PaymentRouteCheckListEntity,
+} from '@/payment-intents/entities/payment-deposit.entity';
+import { PaymentDepositsService } from '@/payment-intents/payment-deposits.service';
+import { PaymentNetworkListEntity } from '@/payment-intents/entities/payment-network.entity';
+import { PaymentNetworkCatalog } from '@/payment-intents/payment-network-catalog.service';
 import { RateLimit } from '@/common/decorators/rate-limit.decorator';
-import { PAYMENT_INTENT_BUILD_RATE_LIMIT } from '@/payment-intents/payment-intents.constants';
+import {
+  PAYMENT_INTENT_BUILD_RATE_LIMIT,
+  PAYMENT_ROUTE_CHECK_RATE_LIMIT,
+} from '@/payment-intents/payment-intents.constants';
 
 /**
  * The 409 both creates return, declared per route because nothing central can
@@ -84,7 +95,11 @@ const SettlementConflictResponse = () =>
 @ApiTags('payment-intents')
 @Controller({ path: 'payment-intents', version: '1' })
 export class PaymentIntentsController {
-  constructor(private readonly paymentIntents: PaymentIntentsService) {}
+  constructor(
+    private readonly paymentIntents: PaymentIntentsService,
+    private readonly deposits: PaymentDepositsService,
+    private readonly networks: PaymentNetworkCatalog,
+  ) {}
 
   @Post('tx')
   // Builds a SEP-7 intent from the request.
@@ -140,32 +155,80 @@ export class PaymentIntentsController {
   // Same budget as `tx`: one bucket for the one step they spell two ways.
   @RateLimit(PAYMENT_INTENT_BUILD_RATE_LIMIT)
   @ApiOperation({
-    summary:
-      'Create a `pay` intent: a payment link and QR on Stellar, Solana or Monad',
+    summary: 'Create a `pay` intent: a payment link and QR on any network',
     description:
-      'Answers a link any wallet can pay and its QR: SEP-7 `web+stellar:pay` ' +
-      'on Stellar (the default `chain`), Solana Pay on Solana, EIP-681 on ' +
-      "Monad, on the key's network (a `prod` key gets mainnet, a `dev` key the " +
-      'test networks). Omit `amount` for an open amount, except on Monad when ' +
-      'this deployment has no deposit addresses; with a `merchantFee`, `uri` ' +
-      'is the hosted checkout on Stellar and a Solana Pay transaction request ' +
-      'on Solana. `memo` (numeric, generated when omitted) is the idempotency ' +
+      'Answers a link and its QR on `chain`, any network payment links settle ' +
+      'on: SEP-7 `web+stellar:pay` on Stellar (the default), Solana Pay on ' +
+      "Solana and EIP-681 on Monad and Arc, on the key's network (a `prod` key gets " +
+      'mainnet, a `dev` key the test networks); on every other network the ' +
+      'hosted checkout, where the payer pays a deposit address made for the ' +
+      'payment from any network (`amount` required, no `merchantFee` or ' +
+      '`callback`; with a `dev` key, only where the sandbox settles, in the ' +
+      "network's test stablecoin: `GET /v1/payment-intents/networks`). A " +
+      'mainnet link with an amount and no ' +
+      'merchant fee can also be paid from another network on Stellar, Solana ' +
+      'and Monad. `memo` (numeric, generated when omitted) is the idempotency ' +
       'key: the same memo and terms return the stored intent, other terms are ' +
-      '`409 idempotency_conflict`. Emits `PAYMENT_INTENT_CREATED`; the ' +
-      'on-chain observer settles the intent when it finds the payment (a ' +
-      'native MON payment without a deposit address needs `validate`).',
+      '`409 idempotency_conflict`. Emits `PAYMENT_INTENT_CREATED`.',
   })
   @ApiCreatedResponse({ type: PayPaymentIntentEntity })
-  // A Solana or Monad intent reads its token's decimals (and Monad's head
-  // block) from the chain before it is stored. A Stellar one calls nobody.
-  @ApiUpstream('Solana', 'Monad')
+  // A Solana, Monad or Arc intent reads its token's decimals (and the EVM
+  // head block) from the chain before it is stored; a link on another network reads
+  // the cross-chain route's token list. A Stellar one calls nobody.
+  @ApiUpstream('Solana', 'Monad', 'Arc', 'Cross-chain route')
   @ApiErrorResponse({
     status: 400,
     codes: [
       ApiErrorCode.ValidationFailed,
       ApiErrorCode.InvalidAmount,
       ApiErrorCode.InvalidMemo,
+      ApiErrorCode.NetworkUnsupported,
+      ApiErrorCode.AssetUnsupported,
+      ApiErrorCode.MerchantFeeUnsupported,
     ],
+    description:
+      '`validation_failed`: the body failed validation, or a field the ' +
+      'network does not take (`callback` off Stellar, no `amount` where one is ' +
+      'required). `invalid_amount`: more decimals than the asset has, or not ' +
+      'above zero. `invalid_memo`: not a numeric MEMO_ID. ' +
+      '`network_unsupported`: with a `dev` key, a network paid through ' +
+      'deposit addresses that the sandbox does not settle yet; or Arc on a ' +
+      'deployment that issues no Arc deposit addresses (an Arc link is paid ' +
+      'only to one, `GET /v1/payment-intents/networks` says so). ' +
+      '`asset_unsupported`: the cross-chain route does not trade that asset ' +
+      "on that network (in the sandbox: not the network's test stablecoin). " +
+      '`merchant_fee_unsupported`: a merchant fee on such a network, or on ' +
+      'Monad without deposit addresses.',
+    examples: {
+      [ApiErrorCode.NetworkUnsupported]: {
+        summary: 'A dev key on a network the sandbox does not settle yet',
+        message:
+          'A payment link on Bitcoin is not available in the sandbox: The sandbox does not settle on this network yet: it needs a UTXO deposit and payout path (follow-up).',
+        path: '/v1/payment-intents/pay',
+      },
+      [ApiErrorCode.AssetUnsupported]: {
+        summary: 'The asset is not traded on that network',
+        message:
+          'The cross-chain route does not support asset "DAI" on base. GET /v1/cross-chain-swaps/assets lists the ones it does.',
+        path: '/v1/payment-intents/pay',
+      },
+      [ApiErrorCode.MerchantFeeUnsupported]: {
+        summary: 'A merchant fee on a network paid through deposit addresses',
+        message:
+          'A payment link on Bitcoin is paid through a deposit address made for each payment, which pays one recipient: a merchant fee is not supported there.',
+        path: '/v1/payment-intents/pay',
+      },
+    },
+  })
+  @ApiErrorResponse({
+    status: 503,
+    codes: [ApiErrorCode.ProviderUnavailable, ApiErrorCode.Misconfigured],
+    description:
+      '`provider_unavailable`: a chain node or the cross-chain route is down ' +
+      'or rate limiting this service; retry. `misconfigured`: the plan ' +
+      'charges a commission on payments from other networks and this ' +
+      'deployment has nowhere to collect it, or a Solana link with a merchant ' +
+      'fee and no gateway URL configured.',
   })
   @MemoConflictResponse()
   createPay(
@@ -193,6 +256,27 @@ export class PaymentIntentsController {
     return this.paymentIntents.findAll(consumer, query);
   }
 
+  @Get('networks')
+  @AllowPublicKey()
+  @RequirePermissions('payments:read')
+  @ApiOperation({
+    summary: 'List the networks a payment link can settle on, for this key',
+    description:
+      'Every payment network, with whether a link can be created there with ' +
+      'this key and why not. A `prod` key reaches every network on mainnet; a ' +
+      '`dev` key reaches the four chains settled natively (Arc, Monad, Solana, ' +
+      'Stellar) on their test networks, and the networks paid through deposit ' +
+      'addresses where the sandbox settles them, each in its test stablecoin ' +
+      '(`asset`). On either tier Arc is available only where this deployment ' +
+      'issues Arc deposit addresses. Read before offering a network in a form.',
+  })
+  @ApiOkResponse({ type: PaymentNetworkListEntity })
+  listNetworks(
+    @CurrentConsumer() consumer: GatewayConsumer,
+  ): PaymentNetworkListEntity {
+    return this.networks.forConsumer(consumer);
+  }
+
   @Get(':id/transitions')
   @RequirePermissions('payments:read')
   @ApiOperation({
@@ -209,6 +293,68 @@ export class PaymentIntentsController {
     @Param('id') id: string,
   ) {
     return this.paymentIntents.listTransitions(consumer, id);
+  }
+
+  @Get(':id/deposits')
+  @RequirePermissions('payments:read')
+  @ApiOperation({
+    summary:
+      "List a payment intent's deposit addresses (payments from any network)",
+    description:
+      'Newest first, at most 50: every deposit address made for a payer of ' +
+      'this link through `POST /v1/payment-links/{id}/deposits`, with what was ' +
+      'sent from which network, the refund address and how each stands. The ' +
+      'one that settled the intent is also named by its `paidFrom`. Only ' +
+      "intents on the key's network.",
+  })
+  @ApiOkResponse({ type: PaymentDepositListEntity })
+  listDeposits(
+    @CurrentConsumer() consumer: GatewayConsumer,
+    @Param('id') id: string,
+  ): Promise<PaymentDepositListEntity> {
+    return this.deposits.listForOwner(consumer, id);
+  }
+
+  @Get(':id/payer-emails')
+  @RequirePermissions('payments:read')
+  @ApiOperation({
+    summary: 'List the emails payers gave in a payment link’s hosted checkout',
+    description:
+      'Newest first, at most 50: each hosted checkout session of this link that ' +
+      'gave an email for the receipt, its language and when it reported its ' +
+      'wallet sent the payment (informational). Unverified: anyone holding the ' +
+      'link can type any address. The receipt goes to one of them (`receiptTo`), ' +
+      'or to none when the payer cannot be told apart (`receiptSkippedAt`).',
+  })
+  @ApiOkResponse({ type: PaymentPayerEmailListEntity })
+  payerEmails(
+    @CurrentConsumer() consumer: GatewayConsumer,
+    @Param('id') id: string,
+  ): Promise<PaymentPayerEmailListEntity> {
+    return this.paymentIntents.payerEmails(consumer, id);
+  }
+
+  @Get(':id/route-check')
+  @RequirePermissions('payments:read')
+  @RateLimit(PAYMENT_ROUTE_CHECK_RATE_LIMIT)
+  @ApiOperation({
+    summary:
+      "Check which main origins can pay a payment link's amount right now",
+    description:
+      'One dry quote per main origin (USDC and USDT on the networks most ' +
+      'payers hold them on, and Bitcoin) for the link’s amount and asset. ' +
+      'Routes have minimums of their own: an origin that cannot pay the ' +
+      'amount comes back `available: false` with the reason. Nothing blocks ' +
+      'the link; the hosted checkout disables those origins. Empty for a link ' +
+      'without a fixed amount or one that cannot be paid from another network.',
+  })
+  @ApiOkResponse({ type: PaymentRouteCheckListEntity })
+  @ApiUpstream('Cross-chain route')
+  routeCheck(
+    @CurrentConsumer() consumer: GatewayConsumer,
+    @Param('id') id: string,
+  ): Promise<PaymentRouteCheckListEntity> {
+    return this.deposits.routeCheck(consumer, id);
   }
 
   @Get(':id')
@@ -239,17 +385,18 @@ export class PaymentIntentsController {
     description:
       "Looks `txHash` up on the intent's chain and checks it pays this intent " +
       '(success, destination, asset, amount, memo or reference, age); a match ' +
-      'settles it `SUCCEEDED` and emits `PAYMENT_INTENT_SUCCEEDED`. This ' +
-      "intent's own payment that failed on-chain marks it `FAILED` " +
-      '(`PAYMENT_INTENT_FAILED`); any other mismatch answers `valid: false` ' +
-      'with a `reason` and leaves the status unchanged. An `EXPIRED` intent ' +
+      'settles it `SUCCEEDED` and emits `PAYMENT_INTENT_SUCCEEDED`. A failed ' +
+      'transaction marks it `FAILED` (`PAYMENT_INTENT_FAILED`) only where it ' +
+      "carries the intent's memo or reference (Stellar, Solana); on Monad and " +
+      'Arc it is a mismatch, and any mismatch answers `valid: false` with a ' +
+      '`reason` and leaves the status unchanged. An `EXPIRED` intent ' +
       'still settles on a verified payment, a `SUCCEEDED` one answers as it ' +
       'is without asking the chain, and one transaction settles at most one ' +
       'intent of any consumer (the oldest it pays).',
   })
   @ApiOkResponse({ type: ValidationOutcomeEntity })
   // Reads the transaction back from the intent's chain.
-  @ApiUpstream('Horizon', 'Solana', 'Monad')
+  @ApiUpstream('Horizon', 'Solana', 'Monad', 'Arc')
   @ApiErrorResponse({
     status: 400,
     codes: [
@@ -286,7 +433,7 @@ export class PaymentIntentsController {
   })
   @ApiOkResponse({ type: PaymentIntentEntity })
   // Setting `txHash` verifies it against the chain before it is stored.
-  @ApiUpstream('Horizon', 'Solana', 'Monad')
+  @ApiUpstream('Horizon', 'Solana', 'Monad', 'Arc')
   @ApiErrorResponse({
     status: 400,
     codes: [

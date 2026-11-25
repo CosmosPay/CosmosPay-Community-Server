@@ -20,7 +20,7 @@ export class CustomerWalletEntity {
   @ApiProperty({
     example: 'GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO',
     description:
-      'The address, in its chain\x27s stored spelling (EIP-55 on Monad).',
+      'The address, in its chain\x27s stored spelling (EIP-55 on Monad and Arc).',
   })
   address!: string;
 
@@ -70,6 +70,14 @@ export class CustomerEntity {
     description: 'Contact email address; null when none was given.',
   })
   email!: string | null;
+
+  @ApiProperty({
+    example: false,
+    description:
+      'True when `email` was typed by a payer in the hosted checkout to get a ' +
+      'receipt: not verified. False when you set it, or there is none.',
+  })
+  emailProvidedByPayer!: boolean;
 
   @ApiProperty({
     type: [CustomerWalletEntity],

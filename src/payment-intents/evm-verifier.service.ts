@@ -2,15 +2,17 @@ import { readMerchantFeeRecord } from '@/common/merchant-fee/merchant-fee';
 import { Injectable } from '@nestjs/common';
 import type { PaymentIntent } from '@generated/prisma/client';
 import { toChecksumAddress } from '@/chains/chain-address';
-import { NATIVE_DECIMALS } from '@/chains/chains.constants';
+import { NATIVE_ASSET_CODES, NATIVE_DECIMALS } from '@/chains/chains.constants';
 import { parseUnits } from '@/chains/units';
 import type { StellarNetwork } from '@/config/configuration';
 import { addressTopic, topicAddress } from '@/evm/eip681';
 import {
-  ERC20_TRANSFER_SELECTOR,
   ERC20_TRANSFER_TOPIC,
   EVM_LOG_SCAN_MAX_CALLS,
+  EVM_NATIVE_TOKEN_INTERFACES,
   type EvmChain,
+  type EvmNativeTokenInterface,
+  isEvmChain,
 } from '@/evm/evm.constants';
 import {
   EvmRpcClient,
@@ -25,9 +27,10 @@ import type {
 } from '@/payment-intents/payment-verifier';
 
 /**
- * Confirms that an EVM transaction pays an intent (Monad).
+ * Confirms that an EVM transaction pays an intent (Monad, Arc), on the
+ * intent's own chain.
  *
- * With a relayer configured, every Monad intent has its own deposit address
+ * With a relayer configured, every intent has its own deposit address
  * (`chainReference`) and that address is the identification — the rules
  * below then apply to it instead of the merchant, the amount becomes "at
  * least", and discovery is the deposit forwarder's (by balance, native MON
@@ -48,35 +51,55 @@ import type {
  *   - ERC-20: a `Transfer(from, to, value)` log of the token contract. The
  *     observer finds these with `eth_getLogs`, resuming from the intent's
  *     cursor each tick.
+ *   - Arc's USDC, the chain's gas coin seen as an ERC-20
+ *     (`EVM_NATIVE_TOKEN_INTERFACES`): the payer's wallet may send it as the
+ *     ERC-20 or as a plain value transfer, and both move one balance. Every
+ *     such movement is logged once by Arc's system emitter (EIP-7708), in 18
+ *     decimals, and an ERC-20 transfer is ALSO logged by the token, in 6. So
+ *     only the emitter's log is read, its value cut to 6 decimals (dust under
+ *     a micro-USDC dropped, as `balanceOf` drops it) and compared with the
+ *     intent's amount: either way of paying settles, and no payment counts
+ *     twice. A value transfer is then found by the observer too.
+ *
+ * A reverted transaction is a plain mismatch here, never `failedOnChain`: it
+ * carries nothing that binds it to one intent (no memo, no reference; payee,
+ * token and amount are public), so anyone could revert a `transfer(payTo,
+ * amount)` from an empty account for the price of gas, have the hash reach
+ * `validate`, and turn the intent FAILED, which is terminal. Only Stellar
+ * (memo) and Solana (reference) can tie a failed transaction to an intent.
  */
 @Injectable()
 export class EvmVerifierService implements PaymentVerifier {
-  private readonly chain: EvmChain = 'monad';
-
   constructor(private readonly rpc: EvmRpcClient) {}
 
   async verifyByHash(
     intent: PaymentIntent,
     hash: string,
   ): Promise<VerificationResult> {
+    const chain = evmChainOf(intent);
     const network = intent.network as StellarNetwork;
     const [tx, receipt] = await Promise.all([
-      this.rpc.getTransaction(this.chain, network, hash),
-      this.rpc.getReceipt(this.chain, network, hash),
+      this.rpc.getTransaction(chain, network, hash),
+      this.rpc.getReceipt(chain, network, hash),
     ]);
     if (!tx || !receipt) {
       return { valid: false, reason: 'Transaction not found on-chain' };
     }
+    // Before any match: a reverted transaction moved nothing, so it never
+    // settles, and it never fails the intent either (see the class comment).
+    if (receipt.status !== '0x1') {
+      return { valid: false, reason: 'Transaction failed on-chain' };
+    }
 
-    const expected = this.expected(intent);
+    const expected = this.expected(chain, intent);
     if (expected === null && !isDeposit(intent)) {
       return { valid: false, reason: 'The intent has no payable amount' };
     }
     const accepts = amountRule(intent, expected);
 
     const paysIntent = intent.assetIssuer
-      ? this.erc20Pays(intent, tx, receipt, accepts)
-      : this.nativePays(intent, tx, accepts);
+      ? this.erc20Pays(chain, intent, receipt, accepts)
+      : this.nativePays(chain, intent, tx, accepts);
     if (!paysIntent) {
       return {
         valid: false,
@@ -86,7 +109,7 @@ export class EvmVerifierService implements PaymentVerifier {
     }
 
     const timestamp = await this.rpc.blockTimestamp(
-      this.chain,
+      chain,
       network,
       receipt.blockNumber,
     );
@@ -100,17 +123,11 @@ export class EvmVerifierService implements PaymentVerifier {
       };
     }
 
-    if (receipt.status !== '0x1') {
-      return {
-        valid: false,
-        failedOnChain: true,
-        reason: 'Transaction failed on-chain',
-      };
-    }
     return {
       valid: true,
       txHash: hash.toLowerCase(),
       payer: toChecksumAddress(tx.from),
+      paidAt: new Date(timestamp * 1000),
     };
   }
 
@@ -119,11 +136,13 @@ export class EvmVerifierService implements PaymentVerifier {
    * the intent's cursor, a provider-sized range at a time, at most
    * {@link EVM_LOG_SCAN_MAX_CALLS} ranges per call. Where it stopped comes back
    * as `nextCursor` whether or not it found anything, so the next tick resumes
-   * there.
+   * there. For Arc's USDC the logs read are the system emitter's, which cover
+   * a value transfer as well as an ERC-20 one, each once.
    */
   async findMatchingPayment(
     intent: PaymentIntent,
   ): Promise<VerificationResult> {
+    const chain = evmChainOf(intent);
     // A deposit address is watched by its balance, by the deposit forwarder,
     // which settles the intent once the money is on its way to the merchant.
     if (isDeposit(intent)) {
@@ -136,19 +155,20 @@ export class EvmVerifierService implements PaymentVerifier {
       return {
         valid: false,
         reason:
-          'A native MON payment emits no log to find it by: confirm it with ' +
+          `A native ${NATIVE_ASSET_CODES[chain]} payment emits no log to find it by: confirm it with ` +
           'POST /v1/payment-intents/{id}/validate and the transaction hash',
       };
     }
-    const expected = this.expected(intent);
+    const expected = this.expected(chain, intent);
     if (expected === null) {
       return { valid: false, reason: 'The intent has no payable amount' };
     }
+    const gasCoin = gasCoinOf(chain, intent.assetIssuer);
 
     const network = intent.network as StellarNetwork;
-    const head = await this.rpc.blockNumber(this.chain, network);
+    const head = await this.rpc.blockNumber(chain, network);
     let cursor = intent.chainCursor ? BigInt(intent.chainCursor) : head;
-    const range = BigInt(this.rpc.logBlockRange(this.chain));
+    const range = BigInt(this.rpc.logBlockRange(chain));
 
     for (
       let calls = 0;
@@ -158,21 +178,28 @@ export class EvmVerifierService implements PaymentVerifier {
       const fromBlock = cursor + 1n;
       const toBlock =
         fromBlock + range - 1n < head ? fromBlock + range - 1n : head;
-      const logs = await this.rpc.getLogs(this.chain, network, {
-        address: intent.assetIssuer,
+      const logs = await this.rpc.getLogs(chain, network, {
+        address: gasCoin?.transferEmitter ?? intent.assetIssuer,
         topics: [ERC20_TRANSFER_TOPIC, null, addressTopic(intent.destination)],
         fromBlock,
         toBlock,
       });
       const match = logs.find(
-        (log) => !log.removed && safeBigInt(log.data) === expected,
+        (log) =>
+          !log.removed && loggedAmount(chain, gasCoin, log.data) === expected,
       );
       if (match) {
+        // The block's time, one read on a match: without it no session's proof
+        // counts for the receipt.
+        const timestamp = await this.rpc
+          .blockTimestamp(chain, network, match.blockNumber)
+          .catch(() => null);
         return {
           valid: true,
           txHash: match.transactionHash.toLowerCase(),
           payer: toChecksumAddress(topicAddress(match.topics[1] ?? '')),
           nextCursor: toBlock.toString(),
+          ...(timestamp !== null ? { paidAt: new Date(timestamp * 1000) } : {}),
         };
       }
       cursor = toBlock;
@@ -189,11 +216,11 @@ export class EvmVerifierService implements PaymentVerifier {
    * fixed none: its amount, plus a merchant fee the payer pays on top (only a
    * deposit-address intent has one; its forwarder pays the fee out).
    */
-  private expected(intent: PaymentIntent): bigint | null {
+  private expected(chain: EvmChain, intent: PaymentIntent): bigint | null {
     if (intent.amount == null) return null;
     const decimals = intent.assetIssuer
       ? intent.assetDecimals
-      : NATIVE_DECIMALS.monad;
+      : NATIVE_DECIMALS[chain];
     if (decimals == null) return null;
     try {
       const amount = parseUnits(intent.amount, decimals);
@@ -206,48 +233,88 @@ export class EvmVerifierService implements PaymentVerifier {
     }
   }
 
+  /** A successful value transfer to the payee for the amount (checked by the caller: status `0x1`). */
   private nativePays(
+    chain: EvmChain,
     intent: PaymentIntent,
     tx: EvmTransaction,
     accepts: (value: bigint | null) => boolean,
   ): boolean {
     return (
-      tx.to?.toLowerCase() === PAY_TO.monad(intent).toLowerCase() &&
+      tx.to?.toLowerCase() === PAY_TO[chain](intent).toLowerCase() &&
       accepts(safeBigInt(tx.value))
     );
   }
 
   /**
-   * A `Transfer` log of the token to the destination for the amount — or, for
-   * a reverted transaction, which emits no logs, the `transfer(to, amount)`
-   * call to the token itself, so the payer's own failed attempt is recognised.
+   * A `Transfer` log of the token to the destination for the amount, in a
+   * successful receipt (a reverted one emits no logs, and the caller refuses
+   * it first). For a chain's gas coin seen as an ERC-20 (Arc's USDC) the log is
+   * the system emitter's instead, never the token's (see the class comment).
    */
   private erc20Pays(
+    chain: EvmChain,
     intent: PaymentIntent,
-    tx: EvmTransaction,
     receipt: EvmReceipt,
     accepts: (value: bigint | null) => boolean,
   ): boolean {
     const token = intent.assetIssuer!.toLowerCase();
-    const destination = addressTopic(PAY_TO.monad(intent));
-    const logged = receipt.logs.some(
+    const payTo = PAY_TO[chain](intent).toLowerCase();
+    const destination = addressTopic(payTo);
+    const gasCoin = gasCoinOf(chain, token);
+    const emitter = gasCoin?.transferEmitter.toLowerCase() ?? token;
+    return receipt.logs.some(
       (log) =>
-        log.address.toLowerCase() === token &&
+        log.address.toLowerCase() === emitter &&
         log.topics[0] === ERC20_TRANSFER_TOPIC &&
         log.topics[2]?.toLowerCase() === destination &&
-        accepts(safeBigInt(log.data)),
-    );
-    if (logged) return true;
-    if (receipt.status === '0x1' || tx.to?.toLowerCase() !== token) {
-      return false;
-    }
-    const input = tx.input.toLowerCase();
-    return (
-      input.startsWith(ERC20_TRANSFER_SELECTOR) &&
-      `0x${input.slice(10, 74)}` === destination &&
-      accepts(safeBigInt(`0x${input.slice(74, 138)}`))
+        accepts(loggedAmount(chain, gasCoin, log.data)),
     );
   }
+}
+
+/**
+ * The intent's chain, as an EVM chain. The verifier is registered only for
+ * EVM chains (`PaymentVerifiers`), so anything else is a wiring error, and
+ * reading it from another chain's node would be worse than refusing.
+ */
+function evmChainOf(intent: Pick<PaymentIntent, 'chain' | 'id'>): EvmChain {
+  if (!isEvmChain(intent.chain)) {
+    throw new Error(
+      `Payment intent ${intent.id} on "${intent.chain}" reached the EVM verifier`,
+    );
+  }
+  return intent.chain;
+}
+
+/**
+ * The chain's gas coin interface when `token` is it (Arc's USDC), else null:
+ * the one token whose payments are read from the system emitter.
+ */
+export function gasCoinOf(
+  chain: EvmChain,
+  token: string,
+): EvmNativeTokenInterface | null {
+  const gasCoin = EVM_NATIVE_TOKEN_INTERFACES[chain];
+  return gasCoin && gasCoin.token.toLowerCase() === token.toLowerCase()
+    ? gasCoin
+    : null;
+}
+
+/**
+ * A logged (or sent) amount in the intent's units: as it is for a token, and
+ * for the gas coin cut from the native decimals to the interface's, truncating
+ * as the interface's `balanceOf` does (Arc: 18 to 6). Null when the hex is not
+ * a quantity.
+ */
+export function loggedAmount(
+  chain: EvmChain,
+  gasCoin: EvmNativeTokenInterface | null,
+  hex: string,
+): bigint | null {
+  const value = safeBigInt(hex);
+  if (value === null || gasCoin === null) return value;
+  return value / 10n ** BigInt(NATIVE_DECIMALS[chain] - gasCoin.decimals);
 }
 
 /** Whether the intent has its own deposit address (the relayer is on). */

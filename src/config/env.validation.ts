@@ -1,21 +1,47 @@
 import { Logger } from '@nestjs/common';
-import { plainToInstance } from 'class-transformer';
+import { plainToInstance, Transform } from 'class-transformer';
 import {
   IsBooleanString,
   IsIn,
   IsInt,
   IsNotEmpty,
+  IsNumber,
   IsOptional,
   IsString,
   IsUrl,
   Matches,
   Max,
+  MaxLength,
   Min,
   MinLength,
+  ValidateIf,
   validateSync,
   type ValidationError,
 } from 'class-validator';
 import { StrKey } from '@stellar/stellar-sdk';
+
+/** Validate a variable only when it holds something: an empty value is an unset one. */
+const isSet = (_: object, value: unknown) =>
+  value !== undefined && value !== null && value !== '';
+
+/**
+ * A blank NUMERIC variable is an unset one too. `isSet` alone cannot see it:
+ * implicit conversion turns `''` into `0` before any validator runs (and before
+ * a `@Transform`, which is why this reads the raw value from `obj`), so a
+ * `KOYWE_MIN_ARS=` left empty failed `@Min(1)` with the plugin off.
+ */
+const blankAsUnset = ({
+  value,
+  key,
+  obj,
+}: {
+  value: unknown;
+  key: string;
+  obj: Record<string, unknown>;
+}) => {
+  const raw = obj[key];
+  return typeof raw === 'string' && raw.trim() === '' ? undefined : value;
+};
 
 const URL_OPTIONS = {
   require_protocol: true,
@@ -30,6 +56,7 @@ import {
 } from '@/config/config.constants';
 import { parseEvmTokenFees } from '@/config/evm-token-fees';
 import { assertIdentityConfigConsistent } from '@/config/identity-env';
+import { assertP2pDirectConfigConsistent } from '@/config/p2p-direct-env';
 import { assertZkPaymentsConfigConsistent } from '@/config/zk-payments-env';
 
 /**
@@ -195,6 +222,70 @@ class EnvironmentVariables {
     message: 'MONAD_RELAYER_PRIVATE_KEY must be a 32-byte hex secret key',
   })
   MONAD_RELAYER_PRIVATE_KEY?: string;
+
+  // --- Arc RPC and relayer (payment links, wallet sign-in, aliases) ---
+  @IsOptional()
+  @IsUrl(URL_OPTIONS)
+  ARC_RPC_URL_MAINNET?: string;
+
+  @IsOptional()
+  @IsUrl(URL_OPTIONS)
+  ARC_RPC_URL_TESTNET?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  ARC_RPC_TIMEOUT_MS?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  ARC_LOG_BLOCK_RANGE?: number;
+
+  /**
+   * Turns on Arc deposit addresses, as `MONAD_RELAYER_PRIVATE_KEY` does on
+   * Monad: a hot key that holds gas (USDC on Arc) and nothing else.
+   */
+  @IsOptional()
+  @Matches(/^(0x)?[0-9a-fA-F]{64}$/, {
+    message: 'ARC_RELAYER_PRIVATE_KEY must be a 32-byte hex secret key',
+  })
+  ARC_RELAYER_PRIVATE_KEY?: string;
+
+  /** `{"0xToken…": "0.05"}`: checked in full by `parseEvmTokenFees`. */
+  @IsOptional()
+  @IsString()
+  ARC_DEPOSIT_TOKEN_FEES?: string;
+
+  // --- Sandbox settlement (payment links on test networks) ---
+  /** BIP-32 seed every sandbox deposit address is derived from: 16 to 64 bytes, hex. */
+  @IsOptional()
+  @Matches(/^(0x)?(?:[0-9a-fA-F]{2}){16,64}$/, {
+    message: 'SANDBOX_DEPOSIT_SEED must be a 16 to 64-byte hex seed',
+  })
+  SANDBOX_DEPOSIT_SEED?: string;
+
+  /** The sandbox treasury's EVM key: it pays merchants on test networks only. */
+  @IsOptional()
+  @Matches(/^(0x)?[0-9a-fA-F]{64}$/, {
+    message: 'SANDBOX_TREASURY_PRIVATE_KEY must be a 32-byte hex secret key',
+  })
+  SANDBOX_TREASURY_PRIVATE_KEY?: string;
+
+  /** `net=url,...`: checked in full by `parseNetworkMap`. */
+  @IsOptional()
+  @IsString()
+  SANDBOX_RPC_URLS?: string;
+
+  /** `net=0x...,...`: checked in full by `parseNetworkMap`. */
+  @IsOptional()
+  @IsString()
+  SANDBOX_CUSD_ADDRESSES?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  SANDBOX_RPC_TIMEOUT_MS?: number;
 
   /** `{"0xToken…": "0.05"}` — checked in full by `parseEvmTokenFees`. */
   @IsOptional()
@@ -569,10 +660,150 @@ class EnvironmentVariables {
   @IsString()
   ELDORADO_PUBLIC_REFERRAL_ID?: string;
 
+  /**
+   * A referral id of source type API: what the direct flow's logins, quotes
+   * and orders carry (the payer never sees the marketplace's window).
+   */
+  @IsOptional()
+  @IsString()
+  ELDORADO_API_REFERRAL_ID?: string;
+
+  /**
+   * Seals the payer's marketplace session in the direct flow. Its shape (32
+   * or more bytes in base64 or hex) is checked by
+   * `assertP2pDirectConfigConsistent`.
+   */
+  @IsOptional()
+  @IsString()
+  P2P_DIRECT_SESSION_SECRET?: string;
+
   @IsOptional()
   @IsInt()
   @Min(1)
   ELDORADO_TIMEOUT_MS?: number;
+
+  /** Where each network's marketplace publishes its webhook signing keys (a JWKS). */
+  @IsOptional()
+  @IsUrl(URL_OPTIONS)
+  ELDORADO_WEBHOOK_JWKS_URL_MAINNET?: string;
+
+  @IsOptional()
+  @IsUrl(URL_OPTIONS)
+  ELDORADO_WEBHOOK_JWKS_URL_TESTNET?: string;
+
+  // --- Payment requests paid by bank transfer (native plugin `koywe`) ---
+  // The types only. Every value is optional: the rail is off for a network
+  // whose set is incomplete. How they relate (two different webhook secrets,
+  // a sandbox network and token the provider pairs, the minimum under the
+  // maximum, the `eldorado` plugin enabled) is checked when the plugin boots
+  // (`assertKoyweConfigConsistent`). An empty value is an unset one, as
+  // `.env.example` leaves them.
+  @ValidateIf(isSet)
+  @IsUrl(URL_OPTIONS)
+  KOYWE_API_URL?: string;
+
+  @IsOptional()
+  @IsString()
+  KOYWE_API_KEY?: string;
+
+  @IsOptional()
+  @IsString()
+  KOYWE_SECRET?: string;
+
+  @IsOptional()
+  @IsString()
+  KOYWE_ORGANIZATION_ID?: string;
+
+  @IsOptional()
+  @IsString()
+  KOYWE_MERCHANT_ID?: string;
+
+  /** Chosen by the operator when registering the webhook endpoint: long and random. */
+  @ValidateIf(isSet)
+  @IsString()
+  @MinLength(32)
+  KOYWE_WEBHOOK_SECRET?: string;
+
+  @ValidateIf(isSet)
+  @IsUrl(URL_OPTIONS)
+  KOYWE_SANDBOX_API_URL?: string;
+
+  @IsOptional()
+  @IsString()
+  KOYWE_SANDBOX_API_KEY?: string;
+
+  @IsOptional()
+  @IsString()
+  KOYWE_SANDBOX_SECRET?: string;
+
+  @IsOptional()
+  @IsString()
+  KOYWE_SANDBOX_ORGANIZATION_ID?: string;
+
+  @IsOptional()
+  @IsString()
+  KOYWE_SANDBOX_MERCHANT_ID?: string;
+
+  @ValidateIf(isSet)
+  @IsString()
+  @MinLength(32)
+  KOYWE_SANDBOX_WEBHOOK_SECRET?: string;
+
+  /** The EVM networks v1 converts on. */
+  @ValidateIf(isSet)
+  @IsIn([
+    'ETHEREUM',
+    'POLYGON',
+    'BASE',
+    'BSC',
+    'ethereum',
+    'polygon',
+    'base',
+    'bsc',
+  ])
+  KOYWE_SANDBOX_NETWORK?: string;
+
+  @ValidateIf(isSet)
+  @IsIn(['USDC', 'USDT', 'usdc', 'usdt'])
+  KOYWE_SANDBOX_TOKEN?: string;
+
+  /** Let Cosmos Pay's own merchant (KOYWE_MERCHANT_ID) take the requests of sellers without an account. */
+  @ValidateIf(isSet)
+  @IsBooleanString()
+  KOYWE_POOLED_ENABLED?: string;
+
+  /** The key the payer's document is hashed under: without it no bank transfer is offered. */
+  @ValidateIf(isSet)
+  @IsString()
+  @MinLength(32)
+  KOYWE_DOCUMENT_PEPPER?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  KOYWE_ACCOUNT_HOLDER?: string;
+
+  /** An Argentine alias: 6 to 20 letters, digits, dots or hyphens. */
+  @ValidateIf(isSet)
+  @Matches(/^[A-Za-z0-9.-]{6,20}$/)
+  KOYWE_ALIAS?: string;
+
+  /** A CVU: 22 digits. */
+  @ValidateIf(isSet)
+  @Matches(/^\d{22}$/)
+  KOYWE_CVU?: string;
+
+  @Transform(blankAsUnset)
+  @ValidateIf(isSet)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(1)
+  KOYWE_MIN_ARS?: number;
+
+  @Transform(blankAsUnset)
+  @ValidateIf(isSet)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(1)
+  KOYWE_MAX_ARS?: number;
 
   // --- Protected payments (native plugin `trustless-work`) ---
   // The types only. How the per-network keys relate to each other (secrets that
@@ -717,6 +948,40 @@ export function validateEnv(config: Record<string, unknown>) {
     );
   }
 
+  // The sandbox treasury holds test funds and signs on test networks only; the
+  // Monad and Arc relayers sign forwarder deployments and nothing else. One key
+  // for both would give each a second use, which both their threat models exclude.
+  const hexKey = (v: string | undefined) =>
+    (v ?? '').trim().toLowerCase().replace(/^0x/, '');
+  for (const relayer of [
+    'MONAD_RELAYER_PRIVATE_KEY',
+    'ARC_RELAYER_PRIVATE_KEY',
+  ] as const) {
+    if (
+      validated.SANDBOX_TREASURY_PRIVATE_KEY &&
+      hexKey(validated.SANDBOX_TREASURY_PRIVATE_KEY) ===
+        hexKey(validated[relayer])
+    ) {
+      throw new Error(
+        `SANDBOX_TREASURY_PRIVATE_KEY must not be ${relayer}: the ` +
+          'sandbox treasury and the mainnet relayer are separate keys.',
+      );
+    }
+  }
+  // One relayer key per chain: each holds one chain's gas money and nothing
+  // else, and a shared key is one leak that empties both.
+  if (
+    validated.MONAD_RELAYER_PRIVATE_KEY &&
+    validated.ARC_RELAYER_PRIVATE_KEY &&
+    hexKey(validated.MONAD_RELAYER_PRIVATE_KEY) ===
+      hexKey(validated.ARC_RELAYER_PRIVATE_KEY)
+  ) {
+    throw new Error(
+      'ARC_RELAYER_PRIVATE_KEY must not be MONAD_RELAYER_PRIVATE_KEY: each EVM ' +
+        'chain has its own relayer key. Generate a fresh one for Arc.',
+    );
+  }
+
   if (!validated.APISIX_GATEWAY_SECRET) {
     throw new Error(
       'APISIX_GATEWAY_SECRET is required: the service only trusts requests that ' +
@@ -763,12 +1028,16 @@ export function validateEnv(config: Record<string, unknown>) {
 
   assertIdentityConfigConsistent(config);
 
+  // The P2P direct flow's session secret: optional, well formed when set.
+  assertP2pDirectConfigConsistent(config);
+
   // Private payments (ZK payments) are optional per network, but all-or-nothing within one.
   assertZkPaymentsConfigConsistent(config);
 
   // Parsed here as well, so a malformed value fails the boot naming its
   // variable instead of surfacing from the configuration factory.
   parseEvmTokenFees(validated.MONAD_DEPOSIT_TOKEN_FEES);
+  parseEvmTokenFees(validated.ARC_DEPOSIT_TOKEN_FEES, 'ARC_DEPOSIT_TOKEN_FEES');
 
   return validated;
 }

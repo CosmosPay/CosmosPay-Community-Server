@@ -64,7 +64,7 @@ export const DEFAULT_MONAD_RPC: Record<StellarNetwork, string> = {
 };
 
 /**
- * Budget for one JSON-RPC call to Solana or Monad. A single read (a
+ * Budget for one JSON-RPC call to Solana, Monad or Arc. A single read (a
  * transaction, a block number, a page of logs) — slower than that is an RPC
  * provider in trouble, and the observer retries on its next tick.
  */
@@ -76,6 +76,23 @@ export const DEFAULT_CHAIN_RPC_TIMEOUT_MS = 10_000;
  * more, and raising it lets the observer catch up in fewer calls.
  */
 export const DEFAULT_MONAD_LOG_BLOCK_RANGE = 100;
+
+/**
+ * Arc's public RPC endpoints, per network tier (docs.arc.io, "Connect to
+ * Arc"). Every call checks `eth_chainId` against `ARC_CHAIN_IDS` first.
+ */
+export const DEFAULT_ARC_RPC: Record<StellarNetwork, string> = {
+  public: 'https://rpc.mainnet.arc.io',
+  testnet: 'https://rpc.testnet.arc.io',
+};
+
+/**
+ * Blocks one `eth_getLogs` may span on Arc. The public endpoints answered a
+ * 10,000-block range and refused 10,001 ("requested range too large", both
+ * tiers, 2026-11-18); half of that leaves room for a provider with a lower
+ * cap, and at ~0.5 s a block it is still about 40 minutes of chain a call.
+ */
+export const DEFAULT_ARC_LOG_BLOCK_RANGE = 5_000;
 
 // --- Rate limiting ---
 
@@ -138,6 +155,44 @@ export const DEFAULT_DEFINDEX_TIMEOUT_MS = 30_000;
 export const DEFAULT_ELDORADO_TIMEOUT_MS = 10_000;
 
 /**
+ * Where the P2P marketplace publishes the keys its webhooks are signed with
+ * (native plugin `eldorado`), per network of the deployment's keys, used when
+ * `ELDORADO_WEBHOOK_JWKS_URL_*` is unset: mainnet's API and the sandbox's.
+ */
+export const DEFAULT_ELDORADO_WEBHOOK_JWKS_URL: Record<StellarNetwork, string> =
+  {
+    public: 'https://api.eldorado.io/api/.well-known/jwks.json',
+    testnet: 'https://api-testnet.eldorado.io/api/.well-known/jwks.json',
+  };
+
+/**
+ * The bank transfer provider's API (native plugin `koywe`) when
+ * `KOYWE_API_URL` / `KOYWE_SANDBOX_API_URL` is unset: production serves the
+ * `public` network's requests, the sandbox the `testnet` ones.
+ */
+export const DEFAULT_KOYWE_API_URL: Record<StellarNetwork, string> = {
+  public: 'https://api.koywe.com',
+  testnet: 'https://api-sandbox.koywe.com',
+};
+
+/**
+ * The amounts a payment request may ask by bank transfer, in ARS, when
+ * `KOYWE_MIN_ARS` / `KOYWE_MAX_ARS` are unset: below a thousand pesos the
+ * conversion's fixed costs eat the charge; five million is about where an
+ * individual's transfer starts drawing a bank's extra checks.
+ */
+export const DEFAULT_KOYWE_MIN_ARS = 1000;
+export const DEFAULT_KOYWE_MAX_ARS = 5_000_000;
+
+/**
+ * Where the sandbox converts every test request (`KOYWE_SANDBOX_NETWORK`,
+ * `KOYWE_SANDBOX_TOKEN` unset): the sandbox delivers no real crypto, and the
+ * test requests are on chains it does not serve (Arbitrum Sepolia).
+ */
+export const DEFAULT_KOYWE_SANDBOX_NETWORK = 'POLYGON';
+export const DEFAULT_KOYWE_SANDBOX_TOKEN = 'USDT';
+
+/**
  * The most a DeFindex transaction may charge its signer in fees, in stroops
  * (1 XLM), when `DEFINDEX_MAX_FEE_STROOPS` is unset: the inclusion fee and the
  * Soroban resource fee together. A deposit that invests through a Blend
@@ -191,6 +246,9 @@ export const DEFAULT_NEAR_INTENTS_BASE_URL = 'https://1click.chaindefuser.com';
  * day; slower than this is 1Click in trouble, and the caller gets a 504.
  */
 export const DEFAULT_NEAR_INTENTS_TIMEOUT_MS = 20_000;
+
+/** Read timeout for a sandbox test-network RPC (SANDBOX_RPC_TIMEOUT_MS). */
+export const DEFAULT_SANDBOX_RPC_TIMEOUT_MS = 15_000;
 
 /**
  * Default slippage for a cross-chain swap, in bps. Higher than a Stellar path

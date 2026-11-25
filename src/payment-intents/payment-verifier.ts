@@ -7,15 +7,22 @@ export interface VerificationResult {
   /** The payer (source) account of the matched on-chain payment, when valid. */
   payer?: string;
   /**
+   * When the matched transaction closed on-chain (ledger close or block time),
+   * when the verifier read it. A checkout session's proof registered at or
+   * after it does not count (`receiptRecipient`).
+   */
+  paidAt?: Date;
+  /**
    * The transaction is this intent's payment — it carries the intent's
    * identifier (Stellar memo, Solana reference) and pays its destination — but
    * it failed on-chain. Only this may settle an intent as FAILED; every other
-   * invalid result is a mismatch.
+   * invalid result is a mismatch. The EVM verifier never reports it: a
+   * reverted EVM transaction has no identifier binding it to one intent.
    */
   failedOnChain?: boolean;
   /**
    * Where a scan got to, for a chain that pages through history by block
-   * (Monad). The observer stores it on the intent so the next tick resumes
+   * (Monad, Arc). The observer stores it on the intent so the next tick resumes
    * there instead of rescanning.
    */
   nextCursor?: string;

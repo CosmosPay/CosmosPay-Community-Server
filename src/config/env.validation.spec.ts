@@ -61,6 +61,20 @@ describe('validateEnv', () => {
     ).toThrow(/APISIX_GATEWAY_SECRET is still a placeholder/);
   });
 
+  it('refuses a P2P direct session secret that is set but too short', () => {
+    expect(() =>
+      validateEnv(validEnv({ P2P_DIRECT_SESSION_SECRET: 'abc123' })),
+    ).toThrow(/P2P_DIRECT_SESSION_SECRET must be at least 32 bytes/);
+    expect(() =>
+      validateEnv(
+        validEnv({
+          P2P_DIRECT_SESSION_SECRET: Buffer.alloc(32, 5).toString('base64'),
+          ELDORADO_API_REFERRAL_ID: 'ref-api',
+        }),
+      ),
+    ).not.toThrow();
+  });
+
   it('rejects other obvious placeholder gateway secrets', () => {
     for (const placeholder of [
       'change-me-to-a-random-value-of-32-chars',
@@ -362,5 +376,188 @@ describe('validateEnv', () => {
         'SWAP_COMMISSION_DEV_WAIVER',
       );
     });
+  });
+
+  describe('bank transfers (native plugin koywe)', () => {
+    const EMPTY = Object.fromEntries(
+      [
+        'KOYWE_API_URL',
+        'KOYWE_WEBHOOK_SECRET',
+        'KOYWE_SANDBOX_API_URL',
+        'KOYWE_SANDBOX_WEBHOOK_SECRET',
+        'KOYWE_SANDBOX_NETWORK',
+        'KOYWE_SANDBOX_TOKEN',
+        'KOYWE_POOLED_ENABLED',
+        'KOYWE_DOCUMENT_PEPPER',
+        'KOYWE_ALIAS',
+        'KOYWE_CVU',
+        'KOYWE_MIN_ARS',
+        'KOYWE_MAX_ARS',
+      ].map((name) => [name, '']),
+    );
+
+    it('reads an empty value as an unset one, as .env.example leaves them', () => {
+      expect(() => validateEnv(validEnv(EMPTY))).not.toThrow();
+    });
+
+    it('reads a blank amount bound as unset, not as 0, with the plugin off', () => {
+      for (const value of ['', '  ']) {
+        expect(() =>
+          validateEnv(
+            validEnv({
+              PLUGINS_ENABLED: '',
+              KOYWE_MIN_ARS: value,
+              KOYWE_MAX_ARS: value,
+            }),
+          ),
+        ).not.toThrow();
+      }
+    });
+
+    it('accepts a whole set', () => {
+      expect(() =>
+        validateEnv(
+          validEnv({
+            KOYWE_API_URL: 'https://api.koywe.com',
+            KOYWE_API_KEY: 'key',
+            KOYWE_SECRET: 'secret',
+            KOYWE_ORGANIZATION_ID: 'org_1',
+            KOYWE_WEBHOOK_SECRET: 'w'.repeat(64),
+            KOYWE_SANDBOX_NETWORK: 'POLYGON',
+            KOYWE_SANDBOX_TOKEN: 'USDT',
+            KOYWE_POOLED_ENABLED: 'false',
+            KOYWE_DOCUMENT_PEPPER: 'p'.repeat(64),
+            KOYWE_ALIAS: 'cosmospay.qr',
+            KOYWE_CVU: '0000003100000000000000',
+            KOYWE_MIN_ARS: '1000',
+            KOYWE_MAX_ARS: '5000000',
+          }),
+        ),
+      ).not.toThrow();
+    });
+
+    it('refuses a short webhook secret or pepper, and values that cannot be', () => {
+      for (const [name, value] of [
+        ['KOYWE_WEBHOOK_SECRET', 'short'],
+        ['KOYWE_SANDBOX_WEBHOOK_SECRET', 'short'],
+        ['KOYWE_DOCUMENT_PEPPER', 'short'],
+        ['KOYWE_SANDBOX_NETWORK', 'SOLANA'],
+        ['KOYWE_SANDBOX_TOKEN', 'ETH'],
+        ['KOYWE_CVU', '123'],
+        ['KOYWE_ALIAS', 'a b'],
+        ['KOYWE_POOLED_ENABLED', 'maybe'],
+        ['KOYWE_MIN_ARS', '0'],
+        ['KOYWE_MAX_ARS', '1000.123'],
+      ]) {
+        expectEnvError(validEnv({ [name]: value }), name);
+      }
+    });
+  });
+
+  describe('sandbox settlement', () => {
+    const KEY = '0x' + '5a'.repeat(32);
+
+    it('accepts a seed, a treasury key and per-network maps', () => {
+      expect(() =>
+        validateEnv(
+          validEnv({
+            SANDBOX_DEPOSIT_SEED: 'ab'.repeat(32),
+            SANDBOX_TREASURY_PRIVATE_KEY: KEY,
+            SANDBOX_RPC_URLS: 'eth=https://rpc.example',
+            SANDBOX_CUSD_ADDRESSES: 'bsc=0x' + 'c'.repeat(40),
+          }),
+        ),
+      ).not.toThrow();
+    });
+
+    it('refuses a short seed and a malformed key', () => {
+      expectEnvError(
+        validEnv({ SANDBOX_DEPOSIT_SEED: 'abcd' }),
+        'SANDBOX_DEPOSIT_SEED',
+      );
+      expectEnvError(
+        validEnv({ SANDBOX_TREASURY_PRIVATE_KEY: '0x1234' }),
+        'SANDBOX_TREASURY_PRIVATE_KEY',
+      );
+    });
+
+    it('refuses the mainnet relayer key as the sandbox treasury', () => {
+      expectEnvError(
+        validEnv({
+          SANDBOX_TREASURY_PRIVATE_KEY: KEY,
+          MONAD_RELAYER_PRIVATE_KEY: KEY.slice(2).toUpperCase(),
+        }),
+        'must not be MONAD_RELAYER_PRIVATE_KEY',
+      );
+      expectEnvError(
+        validEnv({
+          SANDBOX_TREASURY_PRIVATE_KEY: KEY,
+          ARC_RELAYER_PRIVATE_KEY: KEY,
+        }),
+        'must not be ARC_RELAYER_PRIVATE_KEY',
+      );
+    });
+  });
+});
+
+describe('validateEnv: Arc', () => {
+  it('accepts Arc nodes, a relayer key and token fees', () => {
+    expect(() =>
+      validateEnv(
+        validEnv({
+          ARC_RPC_URL_MAINNET: 'https://rpc.mainnet.arc.io',
+          ARC_RPC_URL_TESTNET: 'https://rpc.testnet.arc.io',
+          ARC_RPC_TIMEOUT_MS: '5000',
+          ARC_LOG_BLOCK_RANGE: '5000',
+          ARC_RELAYER_PRIVATE_KEY: `0x${'ab'.repeat(32)}`,
+          ARC_DEPOSIT_TOKEN_FEES: JSON.stringify({
+            '0x3600000000000000000000000000000000000000': '0.02',
+          }),
+        }),
+      ),
+    ).not.toThrow();
+  });
+
+  it('refuses each malformed Arc setting by name', () => {
+    expectEnvError(
+      validEnv({ ARC_RPC_URL_MAINNET: 'nope' }),
+      'ARC_RPC_URL_MAINNET',
+    );
+    expectEnvError(
+      validEnv({ ARC_LOG_BLOCK_RANGE: '0' }),
+      'ARC_LOG_BLOCK_RANGE',
+    );
+    expectEnvError(
+      validEnv({ ARC_RELAYER_PRIVATE_KEY: '0x1234' }),
+      'ARC_RELAYER_PRIVATE_KEY',
+    );
+    expectEnvError(
+      validEnv({ ARC_DEPOSIT_TOKEN_FEES: '{"0x12": "1"}' }),
+      'ARC_DEPOSIT_TOKEN_FEES',
+    );
+  });
+
+  it('refuses the Monad relayer key as the Arc relayer, in any spelling', () => {
+    const KEY = `0x${'cd'.repeat(32)}`;
+    expectEnvError(
+      validEnv({
+        MONAD_RELAYER_PRIVATE_KEY: KEY,
+        ARC_RELAYER_PRIVATE_KEY: KEY.slice(2).toUpperCase(),
+      }),
+      'ARC_RELAYER_PRIVATE_KEY must not be MONAD_RELAYER_PRIVATE_KEY',
+    );
+  });
+
+  it('accepts two different relayer keys, and either one alone', () => {
+    const monad = `0x${'cd'.repeat(32)}`;
+    const arc = `0x${'ef'.repeat(32)}`;
+    const envs: Record<string, string>[] = [
+      { MONAD_RELAYER_PRIVATE_KEY: monad, ARC_RELAYER_PRIVATE_KEY: arc },
+      { MONAD_RELAYER_PRIVATE_KEY: monad },
+      { ARC_RELAYER_PRIVATE_KEY: arc },
+    ];
+    for (const env of envs) {
+      expect(() => validateEnv(validEnv(env))).not.toThrow();
+    }
   });
 });

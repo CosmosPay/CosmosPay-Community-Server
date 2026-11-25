@@ -37,7 +37,7 @@ import { verifyMessageSignature } from '@/chains/message-signature';
  * get one, and the alias would be pointed at the attacker's account by a
  * signature the real owner produced.
  *
- * ## Solana and Monad sign the message, not the digest
+ * ## Solana, Monad and Arc sign the message, not the digest
  *
  * Their wallets sign messages through their own framed APIs — Solana's
  * `signMessage`, which refuses anything shaped like a transaction, and EVM's

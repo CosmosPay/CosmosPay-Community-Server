@@ -157,3 +157,26 @@ describe('verifyMessageSignature', () => {
     });
   });
 });
+
+describe('verifyMessageSignature on Arc', () => {
+  it('checks an EIP-191 personal_sign exactly as on Monad', () => {
+    const secret = secp256k1.utils.randomSecretKey();
+    const pub = secp256k1.getPublicKey(secret, false);
+    const address = `0x${Buffer.from(keccak_256(pub.subarray(1)).subarray(12)).toString('hex')}`;
+    const message = 'Cosmos Pay Wallet sign-in\nchain: arc\nemail: a@b.c';
+    const sig = secp256k1.sign(eip191Digest(Buffer.from(message)), secret, {
+      prehash: false,
+      format: 'recovered',
+    });
+    // noble answers `recovery || r || s`; wallets send `r || s || v`.
+    const rsv = `0x${Buffer.from(sig.subarray(1)).toString('hex')}${(sig[0] + 27).toString(16)}`;
+    expect(verifyMessageSignature('arc', address, message, rsv)).toBe(true);
+    expect(verifyMessageSignature('monad', address, message, rsv)).toBe(true);
+    expect(verifyMessageSignature('arc', address, `${message}!`, rsv)).toBe(
+      false,
+    );
+    expect(verifyMessageSignature('arc', 'not-an-address', message, rsv)).toBe(
+      false,
+    );
+  });
+});

@@ -93,6 +93,9 @@ src/
   cross-chain-swaps/              swaps across 35 networks via NEAR Intents (Stellar, Solana, Monad, EVM,
                                   UTXO, ...): network registry, quote, deposit address + wallet link, observer
   near-intents/                   NEAR Intents 1Click client: tokens, quote, status, deposit submit
+  sandbox-settlement/             payment links on the test networks: one ledger per kind of network (EVM, XRP
+                                  Ledger, NEAR, Sui, Aptos), deposit target per payment, payouts and refunds from
+                                  a treasury, cUSD and treasury-setup script support
   usdt0/                          USDT0 from Stellar to EVM networks through LayerZero's OFT: routes, quote,
                                   build + relay the Soroban `send`, status from the ledger and LayerZero Scan
   zk-payments/                    private payments: confidential transfers on Cosmos Pay's token, verified on-chain;
@@ -113,11 +116,15 @@ src/
   activity/                       client telemetry ingest + feed (wallet, dashboard)
   admin/                          cross-tenant platform admin (console-only), audited
   audit/                          audit-trail writer, called inside other modules' transactions
+  payment-request-rails/          extension point between the plugin that owns payment requests (its ledger)
+                                  and the plugins that pay them another way (a rail, e.g. `transfer`)
   plugins/                        plugin runtime + SDK (sdk.ts): folder loader, signatures, V8-isolate sandbox
   native-plugins/                 first-party plugins, imported only when PLUGINS_ENABLED names them:
     blindpay/                     BlindPay: client, Svix verify, sync + webhook, kyc/, onramp/, offramp/, admin/
     defindex/                     DeFindex vaults (Stellar)
     eldorado/                     P2P on-ramp and off-ramp: local money and stablecoins on El Dorado (Arbitrum)
+    koywe/                        bank transfers in ARS for QR charges: sellers' accounts (hosted KYB), deposit
+                                  instructions, the partner's signed webhook, conversion to the token, sweep
     trustless-work/               protected payments on Trustless Work (Stellar): client, envelope checks,
                                   sync / expiry / deadline jobs, the keyless buyer routes, admin/
   health/                         liveness/readiness probes (@Public)
@@ -158,7 +165,7 @@ regenerated from the controllers and DTOs on every CI run
 | Area              | Base path                | What it does                                             |
 | ----------------- | ------------------------ | -------------------------------------------------------- |
 | Payment intents   | `/v1/payment-intents`    | `pay` intents on Stellar (SEP-7), Solana (Solana Pay) and Monad (EIP-681), SEP-7 `tx`, validation, on-chain observer |
-| Payment links     | `/v1/payment-links`      | One payment intent as its payer sees it, for hosted checkout pages — no API key (`@Public`) |
+| Payment links     | `/v1/payment-links`      | One payment intent as its payer sees it, for hosted checkout pages, and a P2P charge in local money (`/fiat/{id}`) — no API key (`@Public`) |
 | Swaps             | `/v1/swaps`              | Path-payment quote, build unsigned XDR, submit signed · Solana via Jupiter, Monad via Kuru Flow |
 | Cross-chain swaps | `/v1/cross-chain-swaps` | Across 35 networks through NEAR Intents (Stellar, Solana, Monad, EVM chains, Bitcoin and the UTXO coins, ...): quote, deposit address, status |
 | USDT0             | `/v1/usdt0`              | USDT0 from Stellar to 21 EVM networks through LayerZero (native USDT on Ethereum), mainnet only: quote, build, submit, status |
@@ -168,7 +175,7 @@ regenerated from the controllers and DTOs on every CI run
 | Webhooks          | `/v1/webhooks`           | Endpoint CRUD, secret rotation, deliveries, redelivery    |
 | KYC               | `/v1/kyc`                | Receivers (KYC/KYB), wallets, bank accounts, doc upload   |
 | Onramp            | `/v1/onramp`             | Payin quotes, payins, virtual accounts                    |
-| P2P on-ramp | `/v1/onramp/p2p` | Local money to any token on the chains the marketplace lists, through P2P sellers: market, tokens, firm quote, purchase sessions |
+| P2P on-ramp | `/v1/onramp/p2p` | Local money to any token on the chains the marketplace lists, through P2P sellers: market, tokens, firm quote, purchase sessions, charges with a QR (payment requests) |
 | Offramp           | `/v1/offramp`            | Payout quotes, authorize, payouts (client-signed)         |
 | P2P off-ramp | `/v1/offramp/p2p` | Any listed token to local money through P2P buyers: market, tokens, firm quote, sale sessions |
 | Products          | `/v1/products`           | Merchant catalogue                                        |
@@ -297,11 +304,19 @@ Paths use the OpenAPI `{param}` form.
 | POST | `/v1/offramp/payouts/{id}/documents` | `offramp:write` |  |
 | POST | `/v1/offramp/quotes` | `offramp:write` |  |
 | GET | `/v1/onramp/p2p/market` | `onramp:read` | ✓ |
+| GET | `/v1/onramp/p2p/payment-requests` | `onramp:read` |  |
+| POST | `/v1/onramp/p2p/payment-requests` | `onramp:write` | ✓ |
+| GET | `/v1/onramp/p2p/payment-requests/{id}` | `onramp:read` | ✓ |
+| POST | `/v1/onramp/p2p/payment-requests/{id}/cancel` | `onramp:write` | ✓ |
 | POST | `/v1/onramp/p2p/quotes` | `onramp:write` | ✓ |
 | GET | `/v1/onramp/p2p/sessions` | `onramp:read` |  |
 | POST | `/v1/onramp/p2p/sessions` | `onramp:write` | ✓ |
 | GET | `/v1/onramp/p2p/sessions/{id}` | `onramp:read` | ✓ |
 | GET | `/v1/onramp/p2p/tokens` | `onramp:read` | ✓ |
+| POST | `/v1/onramp/p2p/webhooks` | none: `@Public()`, signed by the P2P marketplace; not in the OpenAPI contract |  |
+| GET | `/v1/onramp/transfer/account` | `onramp:read` | ✓ |
+| POST | `/v1/onramp/transfer/account` | `onramp:write` | ✓ |
+| POST | `/v1/onramp/transfer/webhooks` | none: `@Public()`, signed by the bank transfer partner; not in the OpenAPI contract |  |
 | GET | `/v1/onramp/payins` | `onramp:read` |  |
 | POST | `/v1/onramp/payins` | `onramp:write` |  |
 | GET | `/v1/onramp/payins/{id}` | `onramp:read` |  |
@@ -310,11 +325,15 @@ Paths use the OpenAPI `{param}` form.
 | POST | `/v1/onramp/receivers/{receiverId}/virtual-accounts` | `onramp:write` |  |
 | POST | `/v1/onramp/trustline` | `onramp:write` |  |
 | GET | `/v1/payment-intents` | `payments:read` |  |
+| GET | `/v1/payment-intents/networks` | `payments:read` | ✓ |
 | POST | `/v1/payment-intents/pay` | `payments:write` | ✓ |
 | POST | `/v1/payment-intents/tx` | `payments:write` | ✓ |
 | GET | `/v1/payment-intents/{id}` | `payments:read` |  |
 | PATCH | `/v1/payment-intents/{id}` | `payments:write` |  |
 | DELETE | `/v1/payment-intents/{id}` | `payments:write` |  |
+| GET | `/v1/payment-intents/{id}/deposits` | `payments:read` |  |
+| GET | `/v1/payment-intents/{id}/payer-emails` | `payments:read` |  |
+| GET | `/v1/payment-intents/{id}/route-check` | `payments:read` |  |
 | GET | `/v1/payment-intents/{id}/transitions` | `payments:read` |  |
 | POST | `/v1/payment-intents/{id}/validate` | `payments:write` |  |
 | GET | `/v1/payment-links/{id}` | none — `@Public()`, budgeted per client address |  |
@@ -322,6 +341,24 @@ Paths use the OpenAPI `{param}` form.
 | POST | `/v1/payment-links/{id}/events` | none: `@Public()`, budgeted per client address |  |
 | GET | `/v1/payment-links/{id}/solana-pay` | none: `@Public()`, budgeted per client address |  |
 | POST | `/v1/payment-links/{id}/solana-pay` | none: `@Public()`, budgeted per client address |  |
+| GET | `/v1/payment-links/{id}/deposit-assets` | none: `@Public()`, budgeted per client address |  |
+| POST | `/v1/payment-links/{id}/quote` | none: `@Public()`, budgeted per client address |  |
+| POST | `/v1/payment-links/{id}/deposits` | none: `@Public()`, budgeted per client address |  |
+| GET | `/v1/payment-links/{id}/deposits/{depositId}` | none: `@Public()`, budgeted per client address |  |
+| POST | `/v1/payment-links/{id}/payer` | none: `@Public()`, budgeted per client address |  |
+| GET | `/v1/payment-links/fiat/{id}` | none: `@Public()`, budgeted per client address |  |
+| POST | `/v1/payment-links/fiat/{id}/sessions` | none: `@Public()`, budgeted per client address |  |
+| POST | `/v1/payment-links/fiat/{id}/direct/login` | none: `@Public()`, budgeted per client address |  |
+| POST | `/v1/payment-links/fiat/{id}/direct/login/verify` | none: `@Public()`, budgeted per client address |  |
+| GET | `/v1/payment-links/fiat/{id}/direct/kyc` | none: `@Public()`, budgeted per client address |  |
+| POST | `/v1/payment-links/fiat/{id}/direct/kyc/details` | none: `@Public()`, budgeted per client address |  |
+| POST | `/v1/payment-links/fiat/{id}/direct/kyc/phone` | none: `@Public()`, budgeted per client address |  |
+| GET | `/v1/payment-links/fiat/{id}/direct/accounts` | none: `@Public()`, budgeted per client address |  |
+| POST | `/v1/payment-links/fiat/{id}/direct/orders` | none: `@Public()`, budgeted per client address |  |
+| GET | `/v1/payment-links/fiat/{id}/direct/orders/{orderId}` | none: `@Public()`, budgeted per client address |  |
+| POST | `/v1/payment-links/fiat/{id}/direct/orders/{orderId}/paid` | none: `@Public()`, budgeted per client address |  |
+| POST | `/v1/payment-links/fiat/{id}/direct/orders/{orderId}/cancel` | none: `@Public()`, budgeted per client address |  |
+| POST | `/v1/payment-links/fiat/{id}/transfers` | none: `@Public()`, budgeted per client address |  |
 | GET | `/v1/plugins` | `plugins:read` |  |
 | GET | `/v1/plugins/{slug}` | `plugins:read` |  |
 | PUT | `/v1/plugins/{slug}/installation` | `plugins:write` |  |
@@ -514,6 +551,7 @@ Two paths use that single rule:
   on its own: it must be a 64-character hex hash, is stored lowercase, and is
   unique only among the calling consumer's intents (`409 idempotency_conflict`
   on a clash with another of them).
+  On Monad and Arc a failed transaction is always a mismatch: it carries no memo or reference that ties it to the intent, so it never marks one `FAILED`.
 - **Automatic (permanent observer):** `PaymentIntentObserverService` polls Horizon
   every `OBSERVER_INTERVAL_MS` for `PENDING` intents — by reported `txHash`, or by
   scanning payments to the destination — and finalizes matches the same way, so
@@ -921,7 +959,7 @@ and `network` is stored as `public` / `testnet` on every chain.
   `MONAD_DEPOSIT_TOKEN_FEES` entry, or nothing (the relayer absorbs the gas). An
   amount the fee would swallow is `400 invalid_amount`. What arrives after an
   intent expires or is cancelled is still forwarded to the merchant, and a payer
-  can settle sooner with `validate` and their own hash. The relayer key holds gas
+  can settle sooner with `validate` and their own hash. Once a forwarder is deployed, a later balance is flushed only when it is worth the relayer's gas: above the deposit's own fee, or, for a token with no fee, a whole payment of the intent's amount (never for an open amount); dust stays in the forwarder, where `flush` / `flushToken` are open to anyone and pay only the merchant. The relayer key holds gas
   money only: fund it modestly and alert on its balance. The bytecode is committed
   (`src/evm/payment-forwarder.artifact.ts`) and a spec recompiles the source
   against it — every deposit address depends on it, so never change it while old
@@ -940,6 +978,17 @@ and `network` is stored as `public` / `testnet` on every chain.
   "assetCode": "USDC", "assetIssuer": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" }
 // response → { chain: "solana", uri: "solana:<base58>?amount=25.5&spl-token=…&reference=…&memo=…", chainReference, qr, … }
 ```
+
+### Payment links on Arc
+
+`chain: "arc"` is Arc, Circle's EVM chain whose gas coin is USDC, settled natively like Monad. A `prod` key reaches Arc mainnet (chain id 5042), a `dev` key Arc Testnet (5042002), and `network` is stored as `public` / `testnet`. The cross-chain route does not reach Arc (it lists no Arc token), so an Arc link is paid on Arc only (`crossChainPayment` is always false), and Arc has no swap route: `/v1/swaps` and `/v1/cross-chain-swaps` refuse `arc` (`400 validation_failed`). Everything else works as on Monad: EIP-681 links, the observer, `validate` / `PATCH` with an `0x` + 64 hex hash, deposit addresses with a relayer, merchant fees through them, customer wallets, aliases and wallet sign-in (EIP-191), `GET /v1/payment-intents/networks`, and explorer links (`https://explorer.arc.io`, `https://explorer.testnet.arc.io`).
+
+- **USDC is charged through its ERC-20 interface.** Arc's native coin is USDC: 18 decimals as a coin, 6 through the ERC-20 at `0x3600000000000000000000000000000000000000`, one balance behind both. An Arc link never charges the bare coin: an omitted asset, `native` and `USDC` all store that contract as `assetIssuer`, with `asset: "USDC"` and `assetDecimals: 6`, so an amount has at most 6 decimals and the link is `ethereum:0x3600000000000000000000000000000000000000@5042/transfer?address=<payee>&uint256=<amount in 6 decimals>`. `EURC` is a preset too, with its own contract on each tier. Any other ERC-20 is named by `assetIssuer`, its `decimals()` read on Arc, as on Monad.
+- **Either way of paying settles, and no payment counts twice.** The payer's wallet may send USDC as the ERC-20 or as a plain value transfer: both move the same balance. Arc logs every USDC movement once from its system emitter (`0xffff…fffe`, EIP-7708) in 18 decimals, and an ERC-20 transfer is also logged by the token, in 6. The verifier and the observer read only the emitter's log, cut to 6 decimals (dust under a micro-USDC is dropped, as `balanceOf` drops it), so a value transfer is found by the observer too and the two logs of one transfer are never both counted. EURC and other tokens are read from their own `Transfer` log.
+- **Arc links need deposit addresses.** Without `ARC_RELAYER_PRIVATE_KEY` a link on Arc is refused (`400 network_unsupported`, before any node is asked) and `GET /v1/payment-intents/networks` reports Arc `available: false` with the reason, on both tiers. A link that pays the merchant directly is recognised only by destination, asset and exact amount, so one customer's payment could settle another, older intent for the same amount, and another account could create intents for a merchant's address and price to take its payments first come: Monad keeps that mode, Arc never has it. With the key every Arc link gets its own deposit address (open amounts and merchant fees included), forwarded by the same `contracts/PaymentForwarder.sol` and `PaymentSplitForwarder.sol` as on Monad. The deterministic deployment proxy is deployed on Arc mainnet and testnet, so each deposit address is its own `CREATE2` deployment, with nothing to deploy first.
+- **The relayer's fee is in USDC.** Gas on Arc is paid in USDC, so a USDC deposit's `networkFee` is priced like native MON's: the forward's gas budget (520k) at the current gas price plus 25%, written in 6 decimals (0.01625 USDC at 25 gwei), unless `ARC_DEPOSIT_TOKEN_FEES` names a fee for it. EURC and other tokens pay only a configured fee. The relayer never bids under Arc's 20 gwei floor (Arc drops such a transaction without an error), and a fee is never quoted under it either, whatever the node's `eth_gasPrice` says.
+- **Final on inclusion.** A transaction is final in its block, so one confirmation settles; block timestamps repeat at one-second granularity, and the observer orders by block number.
+- **Operating it.** Nothing needs deploying. To turn deposit addresses on, generate a fresh key (never the Monad relayer's or the sandbox treasury's: the boot refuses both), set `ARC_RELAYER_PRIVATE_KEY`, and send its address USDC on each tier it serves: a forward needs about 0.03 USDC on hand (its gas limit at 45 gwei) and spends about 0.012, so 5 USDC covers a few hundred forwards. Test USDC comes from `https://faucet.circle.com`. Alert on the balance rather than overfunding it. Without the key, Arc links are refused and the networks catalog reports Arc unavailable. The public RPCs are the defaults (`ARC_RPC_URL_MAINNET`, `ARC_RPC_URL_TESTNET`), each checked against Arc's chain id before it is trusted.
 
 ### Payment links: the public read behind a hosted checkout
 
@@ -991,6 +1040,32 @@ removed: it is built field by field (`toPublicPaymentLink`), so a column added t
   the checkout's origin and expose `Retry-After` and `ratelimit-*`; without it the
   browser discards every answer.
 
+### Payment links on every network, paid from any network
+
+`POST /v1/payment-intents/pay` takes `chain` from the list cross-chain swaps reach (`PAYMENT_NETWORKS`, which is `CROSS_CHAIN_NETWORK_IDS`: 35 networks). Stellar, Solana and Monad keep their wallet links and their observer. On every other network the link is the hosted checkout and the payer never pays the merchant directly: the checkout asks which network and asset they pay with and a refund address there, and `POST /v1/payment-links/{id}/deposits` answers a deposit address the cross-chain route makes for that one payment (table `payment_deposit`). The route pays the merchant exactly the link's amount in its asset (an exact-output quote), and `PaymentDepositObserverService` settles the intent on the route's report, with the payout transaction as `txHash` and `paidFrom` naming what was sent. No new chain indexer: a deposit is followed like a cross-chain swap.
+
+- **On the test networks, the sandbox.** The route has no test network, so a `dev` key's link settles in the sandbox (next section) where it reaches, and gets `400 network_unsupported` elsewhere. The asset must be one the route trades on that network (`GET /v1/cross-chain-swaps/assets`): name it by its symbol, or by its `contract` as `assetIssuer`.
+- **Open amounts.** A link without `amount` is accepted on every network: the payer types the amount in the checkout, the quote and the deposit carry it (`amount`), and the deposit pays exactly that.
+- **Merchant fees on these networks ride as the route's own app fee** (its multi-recipient fee support): `merchantFee.wallet` is an account inside the route (a NEAR account id, or an EVM address, stored lowercase), credited in the asset the payer sent, in whole basis points of the deposit. The merchant receives the link amount, or the amount less the fee with `paidBy: recipient`. The route pays one on-chain recipient, so the fee is not sent to an address on the link's network; the fee account withdraws it from the route.
+- **Links on Stellar, Solana and Monad can be paid from another network too** when they are on mainnet and have no merchant fee (their fee is split on the chain itself), with or without an amount (`crossChainPayment` on the public read). A Monad link without deposit addresses cannot: its observer recognises a payment by its amount at the merchant's address, where a payout would land too.
+- **The commission.** A payment from another network pays the plan's swap commission (`X-Plan-Swap-Fee-Bps`) to `NEAR_INTENTS_FEE_RECIPIENT`, on top of the link amount: the merchant receives the amount and the payer's deposit carries the fees. The rate is read when the link is created (`crossChainFeeBps`), because the deposit routes take no key. A rate with nowhere to go refuses a link on the new networks (`503 misconfigured`); on Stellar, Solana and Monad the link is created without payments from other networks.
+- **Keyless and bounded.** The deposit routes are `@Public()` under `/v1/payment-links/{id}`, the keyless gateway route that already exists: the link id is the capability. A deposit pays only the link's destination its amount and refunds only `refundTo`; the same client asking again for the same asset and refund address gets its open deposit back. Each client (an IPv4 address or an IPv6 /48, stored only as an HMAC) may have `PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT` (2) open per link (`409`), so nobody holding a link can take another payer's slot; a link takes `PAYMENT_DEPOSIT_LINK_BUDGET` (20) new deposits per `PAYMENT_DEPOSIT_LINK_WINDOW_MS` (5 minutes) from all clients, a refilling budget answered with `429` and `Retry-After`, never a count of open deposits that could lock payers out. An unpaid deposit past its deadline counts for nothing. A slot is reserved under the link's advisory lock before the live quote (`payment_deposit_reservation`), so concurrent requests cannot pass the count together. Budgets per client address: `payment-links:deposit-assets` (30 a minute), `payment-links:quote` (30), `payment-links:deposits` (10), `payment-links:deposit-read` (60). The merchant may raise both for a link (`depositLimits` on create or `PATCH`) up to `PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT_CEILING` (10) per payer and `PAYMENT_DEPOSIT_LINK_BUDGET_CEILING` (200) per window, checked here.
+- **Minimums.** Routes have minimum amounts of their own that change over time. `GET /v1/payment-intents/{id}/route-check` dry-quotes the main origins (`PAYMENT_ROUTE_PROBE_ORIGINS`) for the link's amount, so the dashboard warns about the ones that cannot pay it (it never blocks the link); `deposit-assets` answers the same check as `routes`, so the checkout disables those origins with the reason. A refused quote is `400 provider_error` with its reason, shown before any deposit address exists.
+- **The payer's email and the receipt.** The hosted checkout asks for an email before it offers any way to pay and records it with `POST /v1/payment-links/{id}/payer` as one checkout session: the first call answers a random `payerToken` (only its SHA-256 is stored, and it is never logged), which the page keeps and sends on its later calls (a changed email, `events`, `deposits`). Every session keeps its own email and none can change another's, so a second visitor never blocks the payer. With its token, a session also registers what it pays with on `events` (`address`, the account its wallet pays from; `txHash`, the transaction its wallet answered). When the payment succeeds, `PaymentReceiptsService` emails a receipt in that session's language through this service's mailer (`MAIL_*`), claimed once across replicas and retried by `PaymentReceiptSweeperService` for three days: to the deposit's session for a payment from another network (only it was given that deposit address); else to the session whose registered transaction matches the settlement's (an account alone proves nothing, since addresses are public; a proof counts only when registered `PAYMENT_PAYER_PROOF_MARGIN_MS` (30 s) before the transaction's on-chain time, never when that time is unknown, and never when two sessions match it); else, when exactly one session gave an email, to it; else to nobody (`receiptSkippedAt`), and the merchant reads the emails given with `GET /v1/payment-intents/{id}/payer-emails`. A `sent` report proves nothing and decides nothing. The payer is linked to the merchant's customers (`emailProvidedByPayer: true`: unverified) only on a proof (a deposit or a match), never merged into a customer the merchant created. A wallet link scanned outside the checkout carries no email, so no receipt can follow it.
+- **An address nobody verified, so the receipt is bounded.** The receipt carries only what this service generates (amount, asset, network, date, the payment id and transaction, and links to the payment's checkout page and to the transaction's explorer), never the link's message or any other merchant text. One address gets at most `PAYMENT_RECEIPT_MAX_PER_RECIPIENT` (10) receipts a day from every merchant together, and one merchant sends at most `PAYMENT_RECEIPT_MAX_PER_MERCHANT` (1000): a receipt over either waits for the window. Residual risk: a payer whose wallet does not report its transaction (a wallet link scanned on another device, say), on a link where several sessions gave an email, gets no automatic receipt; the merchant sees the emails given.
+
+Arc is a payment network too, settled natively (see the Arc section above): `PAYMENT_NETWORKS` is every chain, then the other networks the route reaches, 36 in all. The route does not reach Arc, so an Arc link is never paid from another network.
+
+### Sandbox: payment links on the test networks
+
+The cross-chain route has no test network, so a `dev` key's link on a network paid through deposit addresses settles in this service's own sandbox (`src/sandbox-settlement/`), behind the same routes, deposit statuses and `PAYMENT_INTENT_*` webhooks. `GET /v1/payment-intents/networks` answers, per network and for the caller's key, whether a link can be created there, in which asset, and why not.
+
+- **How a payment goes.** Each deposit address is derived for that one payment from `SANDBOX_DEPOSIT_SEED`, its path kept as the deposit's `correlationId` (the key is never stored): BIP-32 at the hardened path `m/44'/60'/7007'/a'/b'` on the EVM networks, SLIP-0010 ed25519 at `m/44'/<coin>'/7007'/a'/b'` on NEAR (coin 397, an implicit account), Sui (784) and Aptos (637). On the XRP Ledger the payer pays the treasury itself with a destination tag made for that payment, the deposit's `depositMemo`, which the payer must attach: an account per payment would need a reserve and a trustline before anyone could pay it. `SandboxDepositObserverService` reads what arrived on the origin test network (the address's test-stablecoin balance; on the XRP Ledger, the validated payments carrying the tag, by delivered amount); once the amount is there, the treasury pays the merchant the link's amount on the link's test network, and the deposit turns `SUCCEEDED` with that payout as the intent's `txHash`. A deposit that arrives after its deadline is refunded from the treasury to `refundTo` on the origin network. Each payout and refund is signed and written to `sandbox_payout` (one per deposit and kind) before it is broadcast, then broadcast again with the same bytes until it is final, never signed a second time, so a crash or a second replica never pays twice. A transfer that can no longer execute (past its XRP Ledger `LastLedgerSequence`, its NEAR block hash or its Aptos expiration, or whose Sui inputs were spent) ends the deposit `FAILED`.
+- **One for one, no commission.** Only the network's test stablecoin is accepted and paid: the official test USDC where one exists, and `cUSD` (`contracts/SandboxUsd.sol`, 6 decimals, deployed from this repo) where none does. A quote is one for one, with no commission and no slippage; no mainnet price is ever used. A sandbox link records `crossChainFeeBps` 0. Open amounts work as on mainnet; a link with a merchant fee is not settled in the sandbox yet (`400 merchant_fee_unsupported`).
+- **Where it settles.** Test USDC on Sepolia, Base Sepolia, Arbitrum Sepolia, OP Sepolia, Polygon Amoy, Avalanche Fuji, Plasma Testnet, X Layer Testnet, the XRP Ledger Testnet, NEAR Testnet, Sui Testnet and Aptos Testnet, and on Monad Testnet as a network to pay from (a Monad link is paid natively). cUSD on BNB Smart Chain Testnet, Gnosis Chiado, Berachain Bepolia and Robinhood Chain Testnet, once `SANDBOX_CUSD_ADDRESSES` names its deployment. Each test USDC answered its symbol and 6 decimals on-chain. Every node is checked before it is trusted, so no sandbox client can reach a mainnet: the EVM chain id (also checked against chainlist), the XRP Ledger's `network_id` 1, NEAR's `chain_id` `testnet`, Sui's testnet chain identifier, Aptos' `chain_id` 2. Scroll's test network was shut down, so a Scroll link is not settled. Abstract (EraVM), HyperCore, Starknet (its test USDC exists, but paying from the treasury needs a deployed Starknet account and Stark-curve signing) and the other networks are not settled yet; the networks route gives the reason.
+- **Operating it.** The treasury pays every payout and refund, so it needs each network's gas coin and test stablecoin; an unfunded treasury only makes deposits wait (a transfer it cannot pay yet is not signed). On the EVM networks it is the address of `SANDBOX_TREASURY_PRIVATE_KEY`; on the XRP Ledger, NEAR, Sui and Aptos it is a key of its own per network, derived from that one (HKDF-SHA256 labelled with the network), so no other variable is needed. `npm run sandbox:keys -- --out <file>` creates the seed, the treasury and a cUSD deployer key in a file outside the repo, `npm run sandbox:status -- --secrets-file <file>` prints each network's treasury address and balances, and `npm run sandbox:deploy-cusd -- --network bsc --secrets-file <file>` deploys cUSD and prints the `SANDBOX_CUSD_ADDRESSES` entry. Unset, the sandbox is off and every network paid through deposit addresses answers `available: false` to a `dev` key.
+- **Per network.** The XRP Ledger and NEAR need a one-time setup once the treasury holds their gas coin: `npm run sandbox:prepare -- --secrets-file <file>` adds the test USDC trustline on the XRP Ledger (until then a payer's payment to the treasury fails in their own wallet, and they keep their funds) and registers the treasury with the test USDC on NEAR. On the XRP Ledger a payout waits until the merchant's account has a test USDC trustline (only that account can add one) and accepts payments without deposit authorization. On NEAR an account must be registered with the token before it can hold it: the treasury registers each deposit account while it waits for the payer, and every payout and refund registers its recipient in the same transaction. On Sui the treasury spends coin objects only: test SUI or USDC credited to its address balance is not spent, and `sandbox:status` shows it apart. Sui is read through its GraphQL service, since its public nodes no longer answer JSON-RPC. Payers' deposits stay at their deposit addresses, and on the XRP Ledger in the treasury (no sweep yet).
+
 ### Wallet sign-in on Solana and Monad
 
 `POST /v1/wallet/auth/finish` and `PUT /v1/wallet/backup` take an optional `chain`
@@ -1005,6 +1080,8 @@ address is stored in its EIP-55 spelling. The recovery setup
 (`POST /v1/wallet/recovery/setup`) stays Stellar-only. The account's keys are
 minted the same way on every chain (see
 [No request depends on the developer platform](#no-request-depends-on-the-developer-platform)).
+
+Arc accounts sign in as Monad's do: a `chain: arc` line, EIP-191 `personal_sign`, and the EIP-55 spelling.
 
 ### Easy recovery: moving a wallet between two devices
 
@@ -1382,6 +1459,8 @@ POST /v1/swaps/quote {chain} → POST /v1/swaps {chain, source} → wallet signs
   keyless tier is the default; with `JUPITER_API_KEY`, point `JUPITER_BASE_URL`
   at `https://api.jup.ag/swap/v1`.
 
+Arc has no swap route: `chain: arc` is refused by validation (`400 validation_failed`), and the cross-chain route does not reach Arc either.
+
 ## Cross-chain swaps (NEAR Intents)
 
 Swaps **across chains** are settled by
@@ -1517,6 +1596,7 @@ It is apart from the plan commission Cosmos Pay charges, which does not change.
 | Cross-chain swaps (`POST /v1/cross-chain-swaps`) | A second NEAR Intents app fee. `wallet` is a NEAR account id, credited inside NEAR Intents. App fees are whole basis points of the deposit, so the fee becomes the basis points it amounts to, rounded down; a fee under one basis point is refused. With `payer`, the plan commission is a share of the larger deposit too |
 | Solana payment links (`POST /v1/payment-intents/pay`, `chain: solana`) | A Solana Pay transfer request names one recipient, so such a link (with an `amount`) is a Solana Pay **transaction request**: `uri` is `solana:<PAYMENT_LINK_API_URL>/v1/payment-links/{id}/solana-pay`, and the wallet POSTs the payer's account there for the transaction: the memo, the merchant's transfer carrying the link's reference, and the fee's transfer (token accounts created when missing, paid by the payer). A SOL fee goes to an account that already exists. The observer finds it by the reference and settles only on both legs |
 | Monad payment links (`POST /v1/payment-intents/pay`, `chain: monad`) | Only with deposit addresses (`MONAD_RELAYER_PRIVATE_KEY`; without them `merchant_fee_unsupported`) and an `amount`: the address is a `contracts/PaymentSplitForwarder.sol` (the fee's wallet and amount are two more constructor arguments, so the address commits to them), whose constructor pays the relayer its fee, then the merchant fee, then the merchant. The link asks for the deposit: the amount, plus the fee when the payer pays it |
+| Arc payment links (`POST /v1/payment-intents/pay`, `chain: arc`) | As on Monad: only with deposit addresses (`ARC_RELAYER_PRIVATE_KEY`; without them no Arc link at all: `network_unsupported`) and an `amount`, through `contracts/PaymentSplitForwarder.sol`, in the link's asset (USDC through its ERC-20 interface, EURC or another ERC-20) |
 | Swaps on Solana (`POST /v1/swaps`, `chain: solana`) | Jupiter pays one integrator fee per swap and the plan commission takes it, so the fee's transfer (out of the source, in the source asset: a System transfer for SOL, else a TransferChecked after creating the wallet's token account) is appended to Jupiter's own v0 transaction: the accounts its lookup tables load are reused, every index rewritten, its compute limit raised, and the route asked with at most 40 accounts so it still fits one packet. A SOL fee goes to an account that already exists |
 | Private payments (`POST /v1/zk-payments`) | A third confidential transfer, in XLM, from the payer to `wallet`, so the fee stays as private as the payment. `wallet` must hold a confidential account on Cosmos Pay's token under auditor 0 (`400 recipient_not_registered` otherwise) and be neither the recipient nor the fee account. The 0.18% commission stays a share of `amount`, and the row's `amount` is what the payer pays in total. Confirm takes the third hash as `merchantFeeTxHash` and checks that transfer like the other two |
 | Liquidity (`POST /v1/liquidity-pools/deposit` and `/withdraw`) | A deposit or withdrawal moves two assets, so the fee is `bps` of EACH (rounded down), paid to `wallet` by one payment per asset in the same transaction, after the deposit, or after the withdrawal and its plan commission; `fixed` is refused (`400 validation_failed`). On a deposit, `recipient` takes it from the amounts (less enters the pool) and `payer` adds it on top. On a withdrawal it comes out of what the withdrawal pays, as a share of its guaranteed minimums, whichever `paidBy` names. `wallet` must exist and trust both assets. The record's `amount` / `asset` are asset A's leg, and `amountB` / `assetB` asset B's |
@@ -1875,6 +1955,8 @@ chain — a wallet that does not ask for one is never handed an address it canno
 pay — and `GET /v1/aliases/by-address/{address}` reads the chain off the address's
 own shape. A Monad address is stored and matched in its EIP-55 spelling.
 
+Arc addresses work as Monad's do (`chain: arc`, EIP-191, EIP-55). An address alone cannot tell Arc from Monad, so `by-address` without `?chain=` reads a `0x` address as Monad: pass `?chain=arc` to look one up on Arc.
+
 ### Routes
 
 | Method | Path | Scope | Description |
@@ -2225,6 +2307,23 @@ A buyer pays local money (a bank transfer in Argentina, PIX, Nequi, Yape, Zelle 
 | GET | `/v1/onramp/p2p/sessions` | `onramp:read` | The consumer's sessions on the key's network |
 | POST | `/v1/onramp/p2p/sessions` | `onramp:write` | Record an order and answer its `widgetUrl` |
 | GET | `/v1/onramp/p2p/sessions/{id}` | `onramp:read` | One of them |
+| POST | `/v1/onramp/p2p/payment-requests` | `onramp:write` | A charge in local money shown as a QR, paid to your own address (the shared public key may create one) |
+| GET | `/v1/onramp/p2p/payment-requests` | `onramp:read` | The consumer's charges on the key's network |
+| GET | `/v1/onramp/p2p/payment-requests/{id}` | `onramp:read` | One of them, and whether it was paid |
+| POST | `/v1/onramp/p2p/payment-requests/{id}/cancel` | `onramp:write` | Stop an open charge from being paid |
+| GET | `/v1/payment-links/fiat/{id}` | none (`@Public()`) | The payer's view of a charge: amount, live estimate, payment methods |
+| POST | `/v1/payment-links/fiat/{id}/sessions` | none (`@Public()`) | The payer starts paying: a purchase of the exact amount, delivered to the seller |
+| POST | `/v1/payment-links/fiat/{id}/direct/login` | none (`@Public()`) | The payer starts verifying by email, to pay an ARS charge from the page |
+| POST | `/v1/payment-links/fiat/{id}/direct/login/verify` | none (`@Public()`) | The emailed code, traded for the payer's session |
+| GET | `/v1/payment-links/fiat/{id}/direct/kyc` | none (`@Public()`) | What the payer's verification needs next |
+| POST | `/v1/payment-links/fiat/{id}/direct/kyc/details` | none (`@Public()`) | The payer's city and phone |
+| POST | `/v1/payment-links/fiat/{id}/direct/kyc/phone` | none (`@Public()`) | The code texted to the payer's phone |
+| GET | `/v1/payment-links/fiat/{id}/direct/accounts` | none (`@Public()`) | The payer's saved bank accounts, a hint only |
+| POST | `/v1/payment-links/fiat/{id}/direct/orders` | none (`@Public()`) | A payment of the exact amount through a verified seller |
+| GET | `/v1/payment-links/fiat/{id}/direct/orders/{orderId}` | none (`@Public()`) | One of those payments: whom to transfer to, and until when |
+| POST | `/v1/payment-links/fiat/{id}/direct/orders/{orderId}/paid` | none (`@Public()`) | The payer transferred: the charge reads `processing` |
+| POST | `/v1/payment-links/fiat/{id}/direct/orders/{orderId}/cancel` | none (`@Public()`) | Cancel a payment the payer has not made |
+| POST | `/v1/onramp/p2p/webhooks` | none (`@Public()`, signed) | The marketplace's order updates |
 | GET | `/v1/offramp/p2p/market` | `offramp:read` | Currencies, payment methods, sell price and minimum (in USD), the chains and the token a form starts from (the shared public key may read it) |
 | GET | `/v1/offramp/p2p/tokens` | `offramp:read` | The same token lists, for a sale (the shared public key may read it) |
 | POST | `/v1/offramp/p2p/quotes` | `offramp:write` | A firm quote for a sale, fees and the swap included; needs the integrator ids |
@@ -2242,6 +2341,52 @@ A buyer pays local money (a bank transfer in Argentina, PIX, Nequi, Yape, Zelle 
 - **Wallets without an account buy and sell too.** The shared public key may quote, open a session and read that one session back with its `publicToken` in `X-Record-Token`; it never lists sessions, since every anonymous wallet is that one consumer. Its quotes and sessions carry `ELDORADO_PUBLIC_REFERRAL_ID` instead of `ELDORADO_REFERRAL_ID` when it is set: El Dorado sets the integrator commission per referral id, so ask for one at the highest rate and anonymous use pays the most, as with swaps.
 - **What is cached.** The market (currencies, prices and the chain list) for a minute per network (`ELDORADO_MARKET_TTL_MS`); each chain's token list for an hour (`ELDORADO_TOKENS_TTL_MS`; Ethereum's is about 1.2 MB). A currency without a price, a minimum or a payment method is left out, and so is a chain whose token list fails or comes back empty: it is logged and asked again on the next read, and the market is a 502 only when the chain list or every token list fails.
 
+### Charging with a QR (payment requests)
+
+A seller charges an amount of local money with a QR, and the payer pays it with a local method through the same marketplace: the token goes from the marketplace straight to the seller's own address, and Cosmos Pay never holds it. `POST /v1/onramp/p2p/payment-requests` checks the terms against the live market exactly as a purchase is checked (currency, amount and its minimum, chain and token; the payer picks the payment method later) and answers `url`, the payer's page (`PAYMENT_LINK_CHECKOUT_URL/fiat/<id>`), and `qr`, a PNG of it. The page reads the charge with `GET /v1/payment-links/fiat/{id}` and, once the payer picks a method, `POST /v1/payment-links/fiat/{id}/sessions` opens a purchase of the exact amount, delivered to the seller, and answers its `widgetUrl`.
+
+- **The payer's routes take no API key.** They live under `/v1/payment-links/fiat/`, so the keyless gateway route that already serves `/v1/payment-links/*` serves them, and the `fiat/` segment keeps them apart from the payment links' own `{id}` routes. The id (a `cuid()`) is the capability: the answer is the amount, the description, the token, an estimate at the market price right now and the payment methods, never the seller's account or address, the record token, the sessions or the transactions. Reads are budgeted at 60 a minute per client address (`payment-links-fiat:read`) and starting to pay at 10 (`payment-links-fiat:session`); both answer `Cache-Control: no-store`.
+- **The purchase belongs to the seller.** It is a BUY session of the request's consumer, listed in their `GET /v1/onramp/p2p/sessions` with `paymentRequestId`, and its widget carries their referral id: a request created with the shared public key carries `ELDORADO_PUBLIC_REFERRAL_ID` (when it is set), as that key's own sessions do. A payer may start more than one purchase; each is a session, and the first to complete pays the request.
+- **Paid means the marketplace said so.** Nothing on-chain is read: a request turns `paid` only when the marketplace's signed webhook reports one of its sessions `COMPLETED` as a `BUY`, delivered to the request's address, chain and token (in any case), paid in its currency and for at least its amount (the widget lets a buyer change the currency and the amount, and a payment in another currency or for less is not this charge). `paidAt`, `paidAmount` (the token delivered) and `paidTxHash` record the first such completion; later ones change nothing. An open request past `expiresAt` reads `expired` (never stored), and an expired or cancelled request still turns `paid` when a purchase already under way completes: the money arrived. Until the webhook is registered nothing marks a request paid, so a wallet should also watch its own balance.
+- **The webhook.** `POST /v1/onramp/p2p/webhooks` is `@Public()` and kept out of the OpenAPI contract, like the fiat partner's. A delivery is accepted only when `x-webhook-hash` is the `sha256` of the raw body (lowercase hex) and `x-webhook-signature` is a base64 RSA-SHA256 signature of that hex by a key of one network's JWKS (`ELDORADO_WEBHOOK_JWKS_URL_MAINNET` / `ELDORADO_WEBHOOK_JWKS_URL_TESTNET`, the marketplace's own by default); the key that verifies it decides which network's sessions it may change. Anything else is `401 webhook_signature_invalid`, and a key set that cannot be read is `503`, so the marketplace sends the delivery again. The keys are kept in memory and read again at most once a minute per network when a delivery does not verify. A verified delivery that names no session is logged and answered `200`. Every write is conditional: a session keeps `COMPLETED` once it has it, and a request is paid once. Sessions answer the marketplace's last order status as `status`.
+- **Operator steps.** The marketplace registers the webhook per Client ID, by email to the same address that issues the integrator ids: send it the Client ID and the URL `https://api.cosmospay.lat/cosmos-api/v1/onramp/p2p/webhooks` (the gateway's public prefix, then `/v1/onramp/p2p/webhooks`). The gateway needs a keyless route for exactly `POST /v1/onramp/p2p/webhooks` that passes the body through unchanged; the payer's routes need nothing new.
+- **Not in this version:** an outbound webhook event when a request is paid, a dashboard view of the requests, and reusable QRs where the payer types the amount.
+
+### Paying a charge from the payer's page (direct)
+
+For an ARS charge the payer can pay through the same marketplace without its window: they verify once and are told whom to transfer the exact amount to, on the charge's own page, while this service drives the marketplace's API for them (`/v1/payment-links/fiat/{id}/direct/*`). The marketplace stays the counterparty (the payer is its client and it runs their identity check), and the token still goes straight to the seller's address. `p2pDirect` on the seller's and the payer's views says whether a charge offers it: the charge is in ARS, `p2p` is in its `methods`, and the deployment sets `ELDORADO_CLIENT_ID`, `ELDORADO_API_REFERRAL_ID` (a referral id of source type API) and `P2P_DIRECT_SESSION_SECRET`. `methods` does not change: `p2p` still means the marketplace, and the page picks the direct flow or the window by the flag.
+
+- **The steps.** `login` emails the payer a code (in the language `Accept-Language` prefers among Spanish, English and Portuguese) and `login/verify` trades it for a `session`. Then `kyc` says what to ask next: `details` (city and phone), `phone` (the texted code), `document` (an ID check at `documentUrl`), `review`, `rejected` or `ready`. `accounts` lists the payer's saved accounts in their own name (a hint, never the number), `orders` opens a payment of the exact amount from one of them or from a new `account` (the check digits of its CVU/CBU and of its CUIT/CUIL are verified), and the page polls the order: `matching`, then `pay` with `payTo` and `dueAt`. The payer marks it `paid` after transferring, or cancels it before.
+- **The session.** The marketplace's sign-in token never leaves this service in clear and is never stored: `session` is that token sealed with AES-256-GCM under a key derived from `P2P_DIRECT_SESSION_SECRET`, bound to the charge and its network, and it expires with the token or after two hours, whichever comes first. Every route after the sign-in takes it in `X-Payer-Session`; a missing, altered, expired or foreign one is `401 session_expired`. Rotating the secret signs every payer out.
+- **What the id unlocks stays bounded.** An order always delivers the charge's token to the charge's address for its amount, and names the charge in `externalReferenceId`; an order read, marked paid or cancelled through a charge must name it there, or it is the 404 of a missing one. Starting something (the sign-in, the verification, the accounts, an order) needs an open charge with `p2pDirect`; an order already under way can still be followed, marked paid and cancelled after the charge expires or is paid, so the payer can finish what they started.
+- **The charge's status.** Marking an order paid moves an open charge to `processing` because of that order. The marketplace's webhook then decides: `COMPLETED` pays it (the same checks as a purchase in the window), `CANCELLED` opens it again (only when that order is the one that made it `processing`; a bank transfer that arrives meanwhile takes it over), and `DISPUTED` leaves it `processing`. The first completion wins, a bank transfer's included. A read of the order from the payer's page that finds it `COMPLETED` or `CANCELLED` is applied the same way, with the same checks, so a lost delivery does not leave the charge waiting. When neither happens by the order's due time plus a day (`P2P_DIRECT_PROCESSING_GRACE_MS`), the charge is open again (`P2pDirectProcessingSweepService`, every five minutes with `OBSERVER_ENABLED`): a payer who marks paid without transferring no longer freezes it, and a completion that still arrives later pays it.
+- **What is kept.** Nothing about the payer: no email, name, account, document or token, in a row or in a log (a refusal from the marketplace is logged by its key names and its error code). The order is recorded as a BUY session of the seller, with the order id the webhook matches it by and the charge's page as its `widgetUrl`.
+- **Errors and budgets.** `400 method_unavailable` when the charge cannot be paid this way, `409 request_closed` unless it is open, `400 invalid_email`, `400 invalid_code`, `400 invalid_phone`, `400 invalid_cbu`, `400 invalid_document`, `400 invalid_bank`, `400 invalid_account`, `409 kyc_required`, `409 too_many_orders` (the marketplace allows a payer two payments in progress), `409 order_not_payable`, `409 order_not_cancellable`, `503 no_sellers` when nobody can take it now and `503 p2p_unavailable` when the marketplace cannot be reached; any other refusal is a neutral `400 rejected`. Per client address: 5 sign-ins a minute (`payment-links-fiat:direct-login`), 10 code checks (`payment-links-fiat:direct-verify`), 30 reads (`payment-links-fiat:direct-read`) and 30 changes (`payment-links-fiat:direct-write`). On top of that, sign-in codes are budgeted per email address (5 an hour, `payment-links-fiat:direct-login-email`, counted under an HMAC of the address, ignoring case and a `+tag`) and per charge (20 every ten minutes, `payment-links-fiat:direct-login-request`), from every client together: `429 rate_limited` with `Retry-After` past either. Every answer is `Cache-Control: no-store`.
+- **Operator steps.** Ask the marketplace for a referral id of source type API (the widget's is of type WIDGET) and set it as `ELDORADO_API_REFERRAL_ID`, and set `P2P_DIRECT_SESSION_SECRET` (`openssl rand -base64 32`). The routes sit under the keyless gateway route of `/v1/payment-links/*`, whose CORS plugin must allow the `X-Payer-Session` header.
+
+## Charges paid by bank transfer
+
+> **A native plugin.** Everything in this section is the `koywe` plugin
+> (`src/native-plugins/koywe/`), served only when `PLUGINS_ENABLED` lists `koywe` and
+> `eldorado` (it refuses to boot without `eldorado`, which owns payment requests). Its
+> routes, its errors and the published contract call the provider "the bank transfer
+> partner"; only its variables and its slug carry its name.
+
+A payer in Argentina pays a QR charge in pesos by bank transfer, from an account in their own name, and the seller receives the charge's token at their own address. Each seller first opens a bank transfer account: a merchant of their own under Cosmos Pay's organization at the partner, verified by the partner's KYB on a form the partner hosts, with an ARS CVU and alias in the seller's name. A charge then offers `transfer` in `methods`, before `p2p`, when it is in ARS, between `KOYWE_MIN_ARS` and `KOYWE_MAX_ARS`, on a token the partner delivers (USDC and USDT on Ethereum, Polygon and Base, USDT on BNB Chain; on testnet every pair the P2P sandbox lists, converted on the sandbox) and its owner's account is approved.
+
+| Method | Path | Scope | Purpose |
+| ------ | ---- | ----- | ------- |
+| GET | `/v1/onramp/transfer/account` | `onramp:read` | The seller's account: status, verification link, alias and CVU |
+| POST | `/v1/onramp/transfer/account` | `onramp:write` | Open it (a person or a company, with a CUIT/CUIL) and start its KYB |
+| POST | `/v1/payment-links/fiat/{id}/transfers` | none (`@Public()`) | The payer gives a CUIT/CUIL or DNI and gets the amount, alias and CVU |
+| POST | `/v1/onramp/transfer/webhooks` | none (`@Public()`, signed) | The partner's deposits, conversion orders and KYB outcomes |
+
+- **The money is the seller's, in the seller's name.** A deposit lands in the seller's own merchant balance; Cosmos Pay converts the whole deposit to the charge's token through the partner (a quote and an ONRAMP order whose `externalId` is the transfer id) and the partner sends it to the charge's `address`. The charge reads `processing` from the deposit until the order completes, then `paid` with `paidMethod: "transfer"`; a `processing` charge never reads as expired and cannot be cancelled. With `KOYWE_POOLED_ENABLED=true`, Cosmos Pay's own merchant (`KOYWE_MERCHANT_ID` / `KOYWE_SANDBOX_MERCHANT_ID`) takes the charges of sellers without an approved account, the shared public key's included, and the money passes through Cosmos Pay's account for those minutes. Off by default.
+- **The payer's document identifies the deposit and is never kept.** The transfer route takes a CUIT/CUIL (check digit verified) or a DNI and stores only the HMAC-SHA256 of its DNI part under `KOYWE_DOCUMENT_PEPPER` and three digits; without the pepper no transfer is offered. The same document gets the same transfer back, answered `200` whether it is new or not, so the route never tells whether a document already asked to pay that charge. Every open transfer of one payer at one merchant asks a different amount: a second charge of the same amount asks a few cents more, and `amount` in the answer is what to transfer.
+- **Matching.** A deposit pays the open transfer of the same document at the same merchant that asks exactly its amount; a larger deposit pays one only when that payer has a single open transfer there (and all of it is converted). A deposit that matches nothing (another document, a short amount, a larger one with several candidates) is stored `unmatched` in `bank_income_event` and logged as an error: ops refunds it by hand. A transfer still matches up to 24 hours after its hour ends.
+- **The webhook.** `POST /v1/onramp/transfer/webhooks` is `@Public()` and kept out of the OpenAPI contract. A delivery is accepted only when `Koywe-Signature` is the lowercase hex HMAC-SHA256 of the raw body under `KOYWE_WEBHOOK_SECRET` or `KOYWE_SANDBOX_WEBHOOK_SECRET`, compared in constant time; the secret that verifies decides the network. Anything else is `401 webhook_signature_invalid`. Each envelope id is stored before anything is applied (a redelivery changes nothing), the answer goes back at once and the calls to the partner run after it; only a failure to store it answers `5xx`, so the partner delivers it again.
+- **Stuck conversions.** The partner's approval policy must allow, for the API user, creating merchants, triggering KYB, creating virtual accounts, CRYPTO accounts and ONRAMP orders on every merchant. An order or an account the policy holds keeps the transfer `converting` with the reason, logged as an error. A sweep (every minute, with `OBSERVER_ENABLED`) retries the conversions with no order (from a minute, doubling, at most an hour), reads back the orders not finished after ten minutes and the KYB still pending every ten minutes. A failed order leaves the charge `processing` with the pesos in the merchant's balance: ops.
+- **Operator steps.** Register the webhook once per environment with `npm run bank-transfer:webhook -- register --network testnet` (and `public`); it signs with that environment's webhook secret, and `list` and `ping --id <id>` check it. The gateway needs a keyless route for exactly `POST /v1/onramp/transfer/webhooks` that passes the body through unchanged; `/v1/payment-links/*` is keyless already. On the sandbox, `npm run bank-transfer:simulate -- --merchant <id> --amount 6000 --document 20123456786` fires a deposit end to end. The scripts print no secret.
 ## Plugins — extensions under a slug
 
 Other teams integrate their technology into this service as a **plugin**: a folder
@@ -2461,7 +2606,8 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
 | ---- | -------------- |
 | `blindpay` | KYC, onramp, offramp, the BlindPay webhook, its `/v1/admin` routes (`receivers`, `payins`, `payouts`) and the `fiat` section of the admin summary |
 | `defindex` | `/v1/defindex` — DeFindex vaults on Stellar |
-| `eldorado` | `/v1/onramp/p2p` and `/v1/offramp/p2p`: tokens on every chain El Dorado's P2P marketplace lists, bought and sold for local money |
+| `eldorado` | `/v1/onramp/p2p` and `/v1/offramp/p2p`: tokens on every chain El Dorado's P2P marketplace lists, bought and sold for local money; charges with a QR, paid through the keyless `/v1/payment-links/fiat/{id}`; the marketplace's order webhook |
+| `koywe` | `/v1/onramp/transfer/account` and the keyless `/v1/payment-links/fiat/{id}/transfers`: payment requests paid by bank transfer in ARS into the seller's own account at the bank transfer partner, converted to the request's token; the partner's webhook. Needs `eldorado` |
 | `trustless-work` | `/v1/protected-payments`, the keyless `/v1/protected-payment-links` and `/v1/admin/protected-payments`: protected payments on Trustless Work (Stellar) |
 
 - **Not listed, not there.** A native plugin `PLUGINS_ENABLED` does not name is
@@ -2494,6 +2640,63 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
   are the one native plugin route group that takes no API key.
 
 ## Upgrading — breaking changes and deploy notes
+
+### Charges paid from the payer's page through the P2P marketplace (direct)
+
+- **Migrations `20261113120000_p2p_direct_orders` and `20261124120000_p2p_direct_processing_deadline`** add the nullable `processingSessionId` and `processingUntil` (with an index on `status, processingUntil`) to `p2p_payment_request`; nothing is rewritten. Run `migrate deploy` before the new build serves.
+- **Payment requests (additive):** `p2pDirect` on the seller's and the payer's views. `processing` can now also mean that the payer of a direct order said they transferred: it turns `paid` when the order completes, or `open` again when it is cancelled.
+- **New keyless routes** under `/v1/payment-links/fiat/{id}/direct/`: `login`, `login/verify`, `kyc`, `kyc/details`, `kyc/phone`, `accounts`, `orders`, `orders/{orderId}`, `orders/{orderId}/paid` and `orders/{orderId}/cancel`. New error codes: `session_expired` (401), `invalid_email`, `invalid_code`, `invalid_phone`, `invalid_account`, `invalid_cbu`, `invalid_bank` and `rejected` (400), `kyc_required`, `too_many_orders`, `order_not_payable` and `order_not_cancellable` (409), `p2p_unavailable` and `no_sellers` (503). New budgets: `payment-links-fiat:direct-login` (5 a minute per client address), `payment-links-fiat:direct-verify` (10), `payment-links-fiat:direct-read` (30) and `payment-links-fiat:direct-write` (30), plus `payment-links-fiat:direct-login-email` (5 an hour per email address) and `payment-links-fiat:direct-login-request` (20 every ten minutes per charge).
+- **A direct order is a session of the seller** (`GET /v1/onramp/p2p/sessions`) whose `widgetUrl` is the charge's own page, since there is no window.
+- **Off until configured:** set `ELDORADO_API_REFERRAL_ID` and `P2P_DIRECT_SESSION_SECRET` (with `ELDORADO_CLIENT_ID`). **Gateway:** add `X-Payer-Session` to the CORS `allow_headers` of the keyless `/v1/payment-links/*` route; no new route.
+
+### Charges paid by bank transfer: a new native plugin, five tables and `processing`
+
+- **Migration `20261112180000_bank_transfer_charges`** creates `bank_transfer_account`, `bank_transfer`, `bank_transfer_webhook_event`, `bank_income_event` and `bank_transfer_crypto_account`, and adds `methods` and `paidMethod` to `p2p_payment_request` (filled for existing rows: `["p2p"]`, and `p2p` for the paid ones). Run `migrate deploy` before the new build serves.
+- **Payment requests (additive):** `methods` on the seller's and the payer's views, `paidMethod` on the seller's, and the status `processing`. A client that switches on `status` must handle `processing` (money received, token on its way): it never reads as expired and cannot be cancelled (`409 request_closed`).
+- **New routes** (plugin `koywe`): `GET` and `POST /v1/onramp/transfer/account`, the keyless `POST /v1/payment-links/fiat/{id}/transfers` and `POST /v1/onramp/transfer/webhooks`. New error codes: `invalid_document`, `method_unavailable` and `invalid_tax_id` (400), `account_required` (403), `account_exists` (409), `transfer_unavailable` (503). New budgets: `payment-links-fiat:transfer` (10 a minute per client address) and `onramp-transfer:account` (5).
+- **Off until configured:** add `koywe` to `PLUGINS_ENABLED` (with `eldorado`), set each environment's `KOYWE_*` variables and `KOYWE_DOCUMENT_PEPPER`, add the gateway route, register the webhook and the partner's policy rules (see *Charges paid by bank transfer*).
+
+### Arc: a fourth chain settled natively
+
+- **`arc` is a new value of `chain`** on payment intents and links, customer wallets, aliases and wallet sign-in, and in every OpenAPI enum that lists chains (`PAYMENT_NETWORKS` now has 36 entries, and `GET /v1/payment-intents/networks` one more row). A client that switches over `chain` should handle it. Nothing existing changes: Monad keeps its behaviour and its variables, and a `0x` address that names no chain is still read as Monad.
+- **No migration:** chains are stored as text, and Arc's deposit addresses go into `evm_deposit_address` beside Monad's (`chain = 'arc'`).
+- **New variables, all optional:** `ARC_RPC_URL_MAINNET`, `ARC_RPC_URL_TESTNET`, `ARC_RPC_TIMEOUT_MS`, `ARC_LOG_BLOCK_RANGE`, `ARC_RELAYER_PRIVATE_KEY`, `ARC_DEPOSIT_TOKEN_FEES`. Without the relayer key Arc links are refused (`400 network_unsupported`) and `GET /v1/payment-intents/networks` reports Arc unavailable; with it, fund its address with USDC on each tier (see the Arc section). The boot refuses an `ARC_RELAYER_PRIVATE_KEY` equal to `MONAD_RELAYER_PRIVATE_KEY`.
+- **Monad and Arc: dust at a deployed forwarder is no longer flushed.** The relayer flushes a balance that reaches a forwarder after its deployment only when it is worth the gas: above the deposit's own fee, or, for a token with no fee, the intent's whole amount (never for an open amount). A smaller balance stays in the forwarder, where anyone can call `flush` / `flushToken`, which pay only the merchant. A deposit's fee is never quoted under the chain's gas floor either (Arc: 20 gwei).
+- **Not on Arc:** same-chain and cross-chain swaps, payments from other networks, USDT0, protected payments, private payments and the sandbox. The swap routes refuse `arc` in validation.
+- **Monad: a reverted transaction no longer fails an intent.** `POST /v1/payment-intents/{id}/validate` used to mark a Monad intent `FAILED` on a reverted transaction that called `transfer(payee, amount)` on the token or sent the amount to the payee. Such a transaction carries nothing of the intent's, so anyone could make an intent `FAILED` (which is final) for the price of gas. On Monad and Arc it is now a plain mismatch (`valid: false`, status unchanged); Stellar and Solana, where the memo or the reference binds it, are unchanged.
+
+### Payment links: a sandbox for the test networks
+
+- **Migration `20261117130000_sandbox_payouts`** creates the `sandbox_payout` table; nothing is rewritten.
+- **A `dev` key can create a link on a network paid through deposit addresses** wherever the sandbox settles (it got `400 network_unsupported` on all of them). Such a link is in the network's test stablecoin and records `crossChainFeeBps` 0.
+- **New route:** `GET /v1/payment-intents/networks` (`payments:read`, the shared public key may call it).
+- **New variables, all optional:** `SANDBOX_DEPOSIT_SEED`, `SANDBOX_TREASURY_PRIVATE_KEY`, `SANDBOX_RPC_URLS`, `SANDBOX_CUSD_ADDRESSES`, `SANDBOX_RPC_TIMEOUT_MS`. Set the first two only where test payments should settle, with keys made for the sandbox: the boot refuses a treasury key equal to `MONAD_RELAYER_PRIVATE_KEY`.
+- **The XRP Ledger, NEAR, Sui and Aptos test networks settle too**, with no new variable: their treasuries derive from `SANDBOX_TREASURY_PRIVATE_KEY`. Run `npm run sandbox:status -- --secrets-file <file>` for their addresses, fund each with its gas coin and test USDC, then run `npm run sandbox:prepare -- --secrets-file <file>` once (the XRP Ledger trustline, the NEAR token registration). Scroll is no longer settled: its test network was shut down, and a `scroll` entry in `SANDBOX_CUSD_ADDRESSES` is ignored.
+
+### Payment links: open amounts, merchant fees and receipts on every network
+
+- **Migration `20261117120000_payment_link_payer_and_limits`** adds nullable columns to `payment_intent` (`payerEmail`, `payerLang`, `receiptClaimedAt`, `receiptSentAt`, `depositMaxPerPayer`, `depositBudgetPerWindow`) and `payment_deposit` (`payerEmail`, `payerLang`, `merchantFee`), and `customer.emailProvidedByPayer` (default `false`). Run `migrate deploy` on each database.
+- **Migrations `20261117121000_payment_receipt_safety`, `20261117122000_payment_payer_sessions`, `20261117123000_payment_payer_session_proof` and `20261117124000_payment_intent_paid_on_chain_at`** add `payment_intent.receiptTo`, `receiptToAt` and `receiptSkippedAt`, the table `payment_payer_session` and `payment_deposit.payerSessionId`, and drop the payer columns the first migration of this release added (`payment_intent.payerEmail`, `payerLang`; `payment_deposit.payerEmail`, `payerLang`), which never held data. Receipts no longer include the link's message.
+- **New routes:** the keyless `POST /v1/payment-links/{id}/payer` (answers `payerToken`), `GET /v1/payment-intents/{id}/route-check` and `GET /v1/payment-intents/{id}/payer-emails` (`payments:read`). `POST /v1/payment-links/{id}/deposits` now requires `payerToken`, and `events` takes it with `address` and `txHash`; the quote and the deposit take `amount` on a link without one; `deposit-assets` answers `routes` beside `data`.
+- **Receipts need the mailer:** set `MAIL_FROM` and `MAIL_RESEND_API_KEY` or `MAIL_SMTP_*`. Without them receipts wait (logged) and go out once a sender is configured, for up to three days.
+- **Additive response fields:** `depositLimits`, `receiptTo`, `receiptSentAt` and `receiptSkippedAt` on payment intents (and their webhooks), `merchantFee` on deposits, `emailProvidedByPayer` on customers.
+
+### Payment links: every network, paid from any network
+
+- **Migration `20261116120000_payment_deposits`** creates the `payment_deposit` and `payment_deposit_reservation` tables and adds two nullable columns to `payment_intent` (`crossChainFeeBps`, `paidFrom`); nothing is rewritten. Run `migrate deploy` on each database before the new build serves.
+- **`chain` on payment intents takes 32 more networks** (`POST /v1/payment-intents/pay`, the list filter, the responses and the webhook payloads). An integration that switches on `stellar`, `solana` and `monad` must handle the others. On the public read `payTo` is now nullable (null on those networks) and `crossChainPayment` is new; on the owner's reads and the webhooks `paidFrom` is new.
+- **New routes:** the keyless `GET /v1/payment-links/{id}/deposit-assets`, `POST /v1/payment-links/{id}/quote`, `POST /v1/payment-links/{id}/deposits` and `GET /v1/payment-links/{id}/deposits/{depositId}`, and `GET /v1/payment-intents/{id}/deposits` (`payments:read`). The gateway's keyless `/v1/payment-links/*` route already serves GET and POST.
+- **No new variable**, but `NEAR_INTENTS_FEE_RECIPIENT` must be set wherever a plan charges a swap commission: without it a link on the new networks is refused (`503`) and a link on Stellar, Solana or Monad is created without payments from other networks. The deposit observer runs with the others (`OBSERVER_ENABLED`).
+
+### P2P on-ramp: charges with a QR in local money, and the marketplace's order webhook
+
+- **Migration `20261112120000_p2p_payment_requests`** creates the `p2p_payment_request` table and adds nullable columns to `p2p_ramp_session` (`paymentRequestId`, `providerOrderId`, `providerStatus`, `deliveredAmount`, `txHash`, `completedAt`); nothing is rewritten. Run `migrate deploy` before the new build serves.
+- **New routes** (the `eldorado` plugin): `POST` and `GET /v1/onramp/p2p/payment-requests`, `GET /v1/onramp/p2p/payment-requests/{id}`, `POST /v1/onramp/p2p/payment-requests/{id}/cancel`, the keyless `GET /v1/payment-links/fiat/{id}` and `POST /v1/payment-links/fiat/{id}/sessions`, and `POST /v1/onramp/p2p/webhooks`. New error codes: `request_closed` (409) and `webhook_signature_invalid` (401).
+- **Sessions gain two nullable fields** (additive): `status`, the marketplace's last status for the order, and `paymentRequestId`.
+- **Gateway:** add a keyless route for exactly `POST /v1/onramp/p2p/webhooks`. `/v1/payment-links/*` is keyless already; its CORS plugin must allow `POST`, as it does for the payment links' own routes.
+- **Register the webhook** with the marketplace by email, with the Client ID: `https://api.cosmospay.lat/cosmos-api/v1/onramp/p2p/webhooks`. Until then no request is marked paid.
+- **Optional variables** `ELDORADO_WEBHOOK_JWKS_URL_MAINNET` and `ELDORADO_WEBHOOK_JWKS_URL_TESTNET` (default: the marketplace's own JWKS).
+- **New budgets:** `onramp-p2p:payment-request` (20 a minute per consumer and client address), `payment-links-fiat:read` (60) and `payment-links-fiat:session` (10) per client address.
 
 ### Swaps, liquidity, private payments, cross-chain swaps and USDT0: one record by its id follows the key's network
 
@@ -3575,6 +3778,17 @@ at least `DATABASE_URL` and `APISIX_GATEWAY_SECRET`.
 | `MONAD_LOG_BLOCK_RANGE` | no | `100` | Blocks one `eth_getLogs` may span — the RPC provider's limit (the public RPC allows 100) |
 | `MONAD_RELAYER_PRIVATE_KEY` | no | — | Relayer key (32-byte hex). Set, every Monad intent gets its own deposit address and the relayer forwards deposits to the merchant, less a fee. Holds gas money only: the forwarders it deploys can pay nobody else |
 | `MONAD_DEPOSIT_TOKEN_FEES` | no | — | Relayer fee per ERC-20 deposit, JSON `{"0xToken": "0.05"}` in token units. A token with no entry is forwarded free (the relayer pays the gas) |
+| `ARC_RPC_URL_MAINNET` | no | `https://rpc.mainnet.arc.io` | Arc RPC for `prod` keys (chain id 5042, checked before use) |
+| `ARC_RPC_URL_TESTNET` | no | `https://rpc.testnet.arc.io` | Arc RPC for `dev` keys (Arc Testnet, chain id 5042002) |
+| `ARC_RPC_TIMEOUT_MS` | no | `10000` | Budget for one Arc RPC call (ms) |
+| `ARC_LOG_BLOCK_RANGE` | no | `5000` | Blocks one `eth_getLogs` may span on Arc: the provider's limit (the public RPC allows 10,000) |
+| `ARC_RELAYER_PRIVATE_KEY` | no | none | Arc relayer key (32-byte hex), as `MONAD_RELAYER_PRIVATE_KEY` on Monad: set, every Arc link gets its own deposit address; unset, Arc links are refused. Holds gas money (USDC) only; never the sandbox treasury's or the Monad relayer's key (the boot refuses both) |
+| `ARC_DEPOSIT_TOKEN_FEES` | no | none | Relayer fee per ERC-20 deposit on Arc, JSON `{"0xToken": "0.05"}` in token units. USDC needs no entry (its fee is priced from gas); another token with no entry is forwarded free |
+| `SANDBOX_DEPOSIT_SEED` | no | none | Sandbox HD seed (16 to 64 bytes, hex). With `SANDBOX_TREASURY_PRIVATE_KEY` it turns the sandbox on: a `dev` key's links on networks paid through deposit addresses settle on test networks. Test funds only |
+| `SANDBOX_TREASURY_PRIVATE_KEY` | no | none | Sandbox treasury key (32-byte hex): pays the sandbox's payouts and refunds on the EVM test networks, and is the root of the treasury's own key on each of the others (HKDF per network). Never a mainnet key; the boot refuses `MONAD_RELAYER_PRIVATE_KEY` / `ARC_RELAYER_PRIVATE_KEY` |
+| `SANDBOX_RPC_URLS` | no | public test-network RPCs | `net=url` pairs, comma-separated, overriding a test network's node (a JSON-RPC URL, except `sui`, a GraphQL URL, and `aptos`, its REST API's `/v1` base). Each is checked for its test network's chain identity before it is trusted |
+| `SANDBOX_CUSD_ADDRESSES` | no | none | `net=0x...` pairs: where cUSD was deployed (`npm run sandbox:deploy-cusd`). A cUSD network without its entry stays unavailable |
+| `SANDBOX_RPC_TIMEOUT_MS` | no | `15000` | Budget for one sandbox test-network call (ms) |
 | `STELLAR_BASE_FEE` | no | `100` | Stellar base fee (stroops) for tx builds |
 | `STELLAR_TX_TIMEOUT` | no | `300` | Transaction timeout (seconds) |
 | `STELLAR_SWAP_FEE_WALLET` | when fee > 0 | — | Platform G... account for swap fees |
@@ -3639,7 +3853,26 @@ at least `DATABASE_URL` and `APISIX_GATEWAY_SECRET`.
 | `ELDORADO_CLIENT_ID` | no | none | The ClientID El Dorado issues to an integrator. With `ELDORADO_REFERRAL_ID`, turns on `POST /v1/onramp/p2p/quotes` and `POST /v1/offramp/p2p/quotes` and attributes each session's order; without both, those routes answer `503 misconfigured` |
 | `ELDORADO_REFERRAL_ID` | no | none | The ReferralID that goes with `ELDORADO_CLIENT_ID` |
 | `ELDORADO_PUBLIC_REFERRAL_ID` | no | none | The ReferralID the shared public key's quotes and sessions carry instead of `ELDORADO_REFERRAL_ID`; ask El Dorado for one at the highest commission. Empty: the public key uses `ELDORADO_REFERRAL_ID` |
+| `ELDORADO_API_REFERRAL_ID` | no | none | A ReferralID whose source type is API (not the widget's): what the direct flow's sign-ins, quotes and orders carry. With `ELDORADO_CLIENT_ID` and `P2P_DIRECT_SESSION_SECRET` it turns on paying an ARS charge from the payer's page (`p2pDirect`). Empty: the flow is off |
+| `P2P_DIRECT_SESSION_SECRET` | no | none | 32 or more random bytes in base64 or hex (`openssl rand -base64 32`): seals the payer's marketplace sign-in into the `X-Payer-Session` the page holds (AES-256-GCM). Must differ from every other secret; rotating it signs every payer out. Empty: the direct flow is off |
 | `ELDORADO_TIMEOUT_MS` | no | `10000` | Budget for one call to the P2P marketplace (ms) |
+| `ELDORADO_WEBHOOK_JWKS_URL_MAINNET` | no | `https://api.eldorado.io/api/.well-known/jwks.json` | Where the P2P marketplace publishes the keys its mainnet order webhooks are signed with (`POST /v1/onramp/p2p/webhooks`) |
+| `ELDORADO_WEBHOOK_JWKS_URL_TESTNET` | no | `https://api-testnet.eldorado.io/api/.well-known/jwks.json` | The same for the sandbox |
+| `KOYWE_API_URL` | no | `https://api.koywe.com` | The bank transfer partner's production API (the `public` network's charges) |
+| `KOYWE_API_KEY` | for bank transfers on mainnet | — | The partner's API key; with `KOYWE_SECRET`, `KOYWE_ORGANIZATION_ID` and `KOYWE_WEBHOOK_SECRET` it turns on bank transfers on mainnet |
+| `KOYWE_SECRET` | with the API key | — | The secret of that API key |
+| `KOYWE_ORGANIZATION_ID` | with the API key | — | Cosmos Pay's organization at the partner: sellers' accounts are merchants under it |
+| `KOYWE_MERCHANT_ID` | for pooled mode | — | Cosmos Pay's own merchant, used only with `KOYWE_POOLED_ENABLED` |
+| `KOYWE_WEBHOOK_SECRET` | with the API key | — | The secret the webhook endpoint is registered with (32 characters or more); deliveries are verified with it. Must differ from the sandbox one |
+| `KOYWE_SANDBOX_API_URL` | no | `https://api-sandbox.koywe.com` | The partner's sandbox (the `testnet` network's charges) |
+| `KOYWE_SANDBOX_API_KEY`, `KOYWE_SANDBOX_SECRET`, `KOYWE_SANDBOX_ORGANIZATION_ID`, `KOYWE_SANDBOX_MERCHANT_ID`, `KOYWE_SANDBOX_WEBHOOK_SECRET` | for bank transfers on testnet | — | The same set for the sandbox |
+| `KOYWE_SANDBOX_NETWORK` | no | `POLYGON` | Where the sandbox converts every test charge: `ETHEREUM`, `POLYGON`, `BASE` or `BSC` |
+| `KOYWE_SANDBOX_TOKEN` | no | `USDT` | The token it converts to: `USDC` or `USDT` (only `USDT` on `BSC`) |
+| `KOYWE_POOLED_ENABLED` | no | `false` | Let Cosmos Pay's merchant take the charges of sellers without an approved account (the money passes through Cosmos Pay's account) |
+| `KOYWE_DOCUMENT_PEPPER` | for bank transfers | — | The key (32 characters or more) payers' documents are hashed under. Without it no bank transfer is offered. Never change it while transfers are open |
+| `KOYWE_ACCOUNT_HOLDER` | no | — | The holder shown for the pooled account |
+| `KOYWE_ALIAS`, `KOYWE_CVU` | no | — | Replace the pooled account's alias and CVU (22 digits) |
+| `KOYWE_MIN_ARS`, `KOYWE_MAX_ARS` | no | `1000`, `5000000` | The amounts a charge may ask by bank transfer |
 | `TRUSTLESS_WORK_API_KEY_TESTNET` | for protected payments on testnet | — | Trustless Work's API key for testnet (`dev` keys). The routes exist only with `trustless-work` in `PLUGINS_ENABLED`; without the key they answer `503 misconfigured` on testnet. Requires `TRUSTLESS_WORK_PLATFORM_SECRET_TESTNET` |
 | `TRUSTLESS_WORK_BASE_URL_TESTNET` | no | `https://dev.api.trustlesswork.com` | Trustless Work's V1 API for testnet |
 | `TRUSTLESS_WORK_PLATFORM_SECRET_TESTNET` | with the API key | — | Cosmos Pay's platform account (S...): signs deploys and platform disputes, pays their XLM and receives the platform fee. Must trust USDC. A hot key: sweep its fees |

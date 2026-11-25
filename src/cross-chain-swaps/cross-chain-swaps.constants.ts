@@ -1,4 +1,5 @@
 /** Constants for cross-chain swaps settled by NEAR Intents. */
+import type { Chain } from '@/chains/chains.constants';
 
 /**
  * Budget for `POST /v1/cross-chain-swaps/quote`, per consumer + client address.
@@ -120,6 +121,14 @@ export const CROSS_CHAIN_NETWORK_IDS = [
   'fogo',
 ] as const;
 export type CrossChainNetworkId = (typeof CROSS_CHAIN_NETWORK_IDS)[number];
+
+/**
+ * The chains this service settles on that the cross-chain route also reaches:
+ * Stellar, Solana and Monad. Arc is a `Chain` but not one of these (1Click
+ * lists no Arc token, `GET /v0/tokens` checked 2026-11-18), so the tables of
+ * how the route names and pays a chain are `Record`s over this, not `Chain`.
+ */
+export type RouteChain = Extract<Chain, CrossChainNetworkId>;
 
 /**
  * EIP-155 chain ids of the EVM networks whose deposits get an EIP-681 link (Monad's

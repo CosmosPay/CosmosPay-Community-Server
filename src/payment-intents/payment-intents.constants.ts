@@ -74,7 +74,7 @@ export const TX_HASH_RE = /^[0-9a-fA-F]{64}$/;
 /** A Solana transaction signature: 64 bytes in base58, 86–88 characters. */
 export const SOLANA_TX_ID_RE = /^[1-9A-HJ-NP-Za-km-z]{80,90}$/;
 
-/** A Monad (EVM) transaction hash: 0x + 32 bytes in hex. */
+/** An EVM (Monad, Arc) transaction hash: 0x + 32 bytes in hex. */
 export const EVM_TX_ID_RE = /^0x[0-9a-fA-F]{64}$/;
 
 /** A hex transaction id of either shape — the ones stored lowercase. */
@@ -261,3 +261,298 @@ export function isCheckoutTheme(value: unknown): value is CheckoutTheme {
 export function effectiveCheckoutTheme(stored: string | null): CheckoutTheme {
   return isCheckoutTheme(stored) ? stored : DEFAULT_CHECKOUT_THEME;
 }
+
+// ── Payments from any network (deposit addresses) ───────────────────────────
+
+/**
+ * What a token is named by on a network other than Stellar, Solana and Monad,
+ * as `assetIssuer` takes it: the contract the cross-chain route lists, which is
+ * not always an address (a Sui coin type, a NEAR account id). Printable ASCII
+ * with no space, bounded; the service accepts only a value the route lists.
+ */
+export const PAYMENT_TOKEN_ID_RE = /^[\x21-\x7e]{1,200}$/;
+
+/**
+ * `GET /v1/payment-links/{id}/deposit-assets`, per client address. The list is
+ * the cross-chain route's cached token list: a checkout reads it once per visit,
+ * perhaps again after a reload. Thirty a minute is a payer reloading over and
+ * over.
+ */
+export const PAYMENT_DEPOSIT_ASSETS_RATE_LIMIT = {
+  name: 'payment-links:deposit-assets',
+  limit: 30,
+  windowMs: 60 * 1000,
+};
+
+/**
+ * `POST /v1/payment-links/{id}/quote`, per client address. Each call is a dry
+ * quote at the cross-chain route, a solver auction counted against the one
+ * partner key the deployment shares, from a route with no key of its own.
+ * Thirty a minute is a payer trying network after network.
+ */
+export const PAYMENT_DEPOSIT_QUOTE_RATE_LIMIT = {
+  name: 'payment-links:quote',
+  limit: 30,
+  windowMs: 60 * 1000,
+};
+
+/**
+ * `POST /v1/payment-links/{id}/deposits`, per client address. Each one is a live
+ * quote that makes a deposit address and a row the observer polls until it
+ * settles or its deadline (plus the rescue window) passes. Ten a minute is a
+ * payer changing their mind several times; the per-client cap below bounds how
+ * many of them stay open on one link.
+ */
+export const PAYMENT_DEPOSIT_CREATE_RATE_LIMIT = {
+  name: 'payment-links:deposits',
+  limit: 10,
+  windowMs: 60 * 1000,
+};
+
+/**
+ * `GET /v1/payment-links/{id}/deposits/{depositId}`, per client address: the page
+ * polls it every few seconds beside the link itself, which has its own bucket.
+ * The same sixty a minute as the link read, for the same reasons.
+ */
+export const PAYMENT_DEPOSIT_READ_RATE_LIMIT = {
+  name: 'payment-links:deposit-read',
+  limit: 60,
+  windowMs: 60 * 1000,
+};
+
+/**
+ * The most deposit addresses one CLIENT (an IPv4 address, or an IPv6 /48:
+ * `paymentDepositClientSubject`) may have open on one payment link at once,
+ * waiting for a deposit or with one in progress. A payer needs one; two cover
+ * changing network or asset once.
+ *
+ * This is the cap a caller meets first. The link id is the only capability
+ * these routes take, so a cap shared by everyone holding it, alone, was a
+ * lockout: anyone could open the link's slots with addresses nobody pays and
+ * keep the real payer out until they expired. Per client, a caller fills only
+ * its own two.
+ */
+export const PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT = 2;
+
+/**
+ * How many NEW deposit addresses one payment link takes per
+ * {@link PAYMENT_DEPOSIT_LINK_WINDOW_MS}, from all clients together: a creation
+ * budget that refills, never a count of open deposits. It bounds what one link
+ * can cost upstream (deposit addresses, rows the observer polls) when a caller
+ * rotates addresses past the per-client cap. Past it a create is `429` with
+ * `Retry-After` until the oldest creation leaves the window, so spending it
+ * delays payers for minutes at most and locks nobody out: a hard cap on open
+ * deposits did, for as long as they lived. Twenty in five minutes is far
+ * beyond honest payers sharing a link.
+ */
+export const PAYMENT_DEPOSIT_LINK_BUDGET = 20;
+
+/** The sliding window {@link PAYMENT_DEPOSIT_LINK_BUDGET} counts in. */
+export const PAYMENT_DEPOSIT_LINK_WINDOW_MS = 5 * 60 * 1000;
+
+/**
+ * How many leading hextets of an IPv6 address make one deposit client: three,
+ * a /48. Wider than the rate limits' /64 on purpose: a /48 is what one site or
+ * one hosting customer is routinely given, so rotating through its 65,536 /64s
+ * costs nothing and must not buy 65,536 times the per-client cap.
+ */
+export const PAYMENT_DEPOSIT_CLIENT_IPV6_HEXTETS = 3;
+
+/**
+ * How long a slot reserved for a deposit being opened is held, at least. A slot
+ * is reserved under the link's lock BEFORE the live quote (which takes up to
+ * NEAR_INTENTS_TIMEOUT_MS) and released once the deposit row exists or the
+ * quote failed; this lifetime only matters when the process died in between, so
+ * a slot is never lost for longer than this. The service holds it for three
+ * quote timeouts when that is longer.
+ */
+export const PAYMENT_DEPOSIT_RESERVATION_MIN_MS = 2 * 60 * 1000;
+
+/**
+ * The first key of the transaction-scoped advisory lock that serializes the
+ * deposit slots of one payment link (`pg_advisory_xact_lock(class, hashtext(id))`).
+ * The two-key form, so it can never meet a job lock (`AdvisoryLockKey`, one
+ * 64-bit key); this class is the deposits' alone.
+ */
+export const PAYMENT_DEPOSIT_LOCK_CLASS = 881_022;
+
+/**
+ * What a client's address is stored as on a deposit: HMAC-SHA256 under a key
+ * derived from APISIX_GATEWAY_SECRET with this salt and label, never the address
+ * itself. Equal for one client, so the per-client cap can count it; useless to
+ * anyone who reads the table without the secret.
+ */
+export const PAYMENT_DEPOSIT_CLIENT_KEY_SALT = 'cosmos-pay payment-deposit';
+export const PAYMENT_DEPOSIT_CLIENT_KEY_LABEL = 'payment-deposit client v1';
+
+/**
+ * A new deposit request for the same origin asset and refund address returns
+ * the open one instead of making another, while that one still has at least
+ * this long before its deadline: enough to send from a wallet. A reload of the
+ * checkout then shows the same address rather than a new one.
+ */
+export const PAYMENT_DEPOSIT_REUSE_MIN_REMAINING_MS = 10 * 60 * 1000;
+
+/** The most deposits the owner's list of one payment intent answers, newest first. */
+export const PAYMENT_DEPOSIT_OWNER_LIST_MAX = 50;
+
+/**
+ * The most a merchant may raise a link's per-payer cap to (`depositLimits.perPayer`;
+ * the default is {@link PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT}). A kiosk or an event
+ * behind one network may need more than two; past ten, one address could hold a
+ * link's whole creation budget.
+ */
+export const PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT_CEILING = 10;
+
+/**
+ * The most a merchant may raise a link's creation budget to
+ * (`depositLimits.perWindow`, per {@link PAYMENT_DEPOSIT_LINK_WINDOW_MS}; the default
+ * is {@link PAYMENT_DEPOSIT_LINK_BUDGET}). Each new deposit is a live quote and a row
+ * the observer polls for a day; two hundred in five minutes is a busy event, and
+ * the most one link may cost upstream.
+ */
+export const PAYMENT_DEPOSIT_LINK_BUDGET_CEILING = 200;
+
+/**
+ * The origins a link's amount is checked against at creation, and for the
+ * checkout (`PaymentRouteProbe`): the stablecoins most payers hold, on the
+ * networks they most hold them on, plus Bitcoin. Each is one dry quote; routes
+ * have minimums of their own (a Tron route has asked for $100, Bitcoin's bridge a
+ * minimum in BTC), and a payer should not find that out after picking one.
+ */
+export const PAYMENT_ROUTE_PROBE_ORIGINS = [
+  { chain: 'eth', asset: 'USDC' },
+  { chain: 'base', asset: 'USDC' },
+  { chain: 'arb', asset: 'USDC' },
+  { chain: 'pol', asset: 'USDC' },
+  { chain: 'solana', asset: 'USDC' },
+  { chain: 'bsc', asset: 'USDT' },
+  { chain: 'tron', asset: 'USDT' },
+  { chain: 'btc', asset: 'BTC' },
+] as const;
+
+/**
+ * The refund address a probe's dry quote names: one the route accepts on each
+ * probed network, for a quote that reserves nothing and can never refund. The EVM
+ * and Solana ones are derived from sha256("cosmos pay route probe") (keccak for
+ * the EVM address), so nobody holds a key to them; the route refuses the
+ * well-known burn addresses there. Tron's and Bitcoin's are their well-known
+ * burn addresses, which it accepts.
+ */
+export const PAYMENT_ROUTE_PROBE_REFUND_TO: Record<
+  (typeof PAYMENT_ROUTE_PROBE_ORIGINS)[number]['chain'],
+  string
+> = {
+  eth: '0x9a5A2B9540E1AE4FCAabaAebFFe90D6737d8299E',
+  base: '0x9a5A2B9540E1AE4FCAabaAebFFe90D6737d8299E',
+  arb: '0x9a5A2B9540E1AE4FCAabaAebFFe90D6737d8299E',
+  pol: '0x9a5A2B9540E1AE4FCAabaAebFFe90D6737d8299E',
+  bsc: '0x9a5A2B9540E1AE4FCAabaAebFFe90D6737d8299E',
+  solana: 'C8cxhxckoW7AyUCvyiZnXCPAUsAeUWz5EDtrpzDAs891',
+  tron: 'T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb',
+  btc: '1BitcoinEaterAddressDontSendf59kuE',
+};
+
+/**
+ * How long a probe's answer for one asset and amount is reused, and how many such
+ * answers are kept. Minimums move slowly; ten minutes keeps a busy link's checkout
+ * from costing eight quotes per visitor.
+ */
+export const PAYMENT_ROUTE_PROBE_TTL_MS = 10 * 60 * 1000;
+export const PAYMENT_ROUTE_PROBE_MAX_ENTRIES = 2000;
+
+/** `GET /v1/payment-intents/{id}/route-check`, per consumer and client address. */
+export const PAYMENT_ROUTE_CHECK_RATE_LIMIT = {
+  name: 'payment-intents:route-check',
+  limit: 30,
+  windowMs: 60 * 1000,
+};
+
+/**
+ * `POST /v1/payment-links/{id}/payer`, per client address: the checkout records
+ * the payer's email once before showing how to pay, maybe again after a typo.
+ */
+export const PAYMENT_LINK_PAYER_RATE_LIMIT = {
+  name: 'payment-links:payer',
+  limit: 10,
+  windowMs: 60 * 1000,
+};
+
+/** The languages a receipt is written in: the checkout's, English otherwise. */
+export const RECEIPT_LANGS = [
+  'en',
+  'es',
+  'pt',
+  'fr',
+  'de',
+  'hi',
+  'zh',
+] as const;
+export type ReceiptLang = (typeof RECEIPT_LANGS)[number];
+
+/**
+ * How long a replica's claim on sending one receipt lasts. Past it another replica
+ * (or the next sweep) may send it: a send that died mid-way is retried, at the cost
+ * of a rare second copy, which beats a receipt that never goes out.
+ */
+export const PAYMENT_RECEIPT_CLAIM_MS = 5 * 60 * 1000;
+
+/**
+ * How far back the receipt sweeper looks for a settled payment whose receipt has
+ * not gone out (the mailer down, a pod killed): three days, then it gives up and
+ * logs, rather than mailing a payer about last month.
+ */
+export const PAYMENT_RECEIPT_RETRY_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
+
+/**
+ * Random bytes in a checkout session's token (256 bits; the floor asked is
+ * 128). The token is the session's only credential: only its SHA-256 is
+ * stored, and it is never logged.
+ */
+export const PAYMENT_PAYER_TOKEN_BYTES = 32;
+
+/**
+ * How long before the settling transaction's on-chain time a checkout session's
+ * proof must have been registered to count. Our clock and the chain's are
+ * different clocks: the margin keeps a proof registered from a copy of a
+ * transaction seen early (a mempool, a fast indexer) from passing as earlier
+ * than the chain, at the cost of a payer who pays within it.
+ */
+export const PAYMENT_PAYER_PROOF_MARGIN_MS = 30_000;
+
+/** The checkout sessions' emails the owner's read of a payment lists, newest first. */
+export const PAYMENT_PAYER_EMAILS_LISTED = 50;
+
+/** Receipts the sweeper sends per tick. */
+export const PAYMENT_RECEIPT_SWEEP_BATCH = 25;
+
+/**
+ * How far back the receipt limits count. A receipt goes to an address the
+ * payer typed and nobody verified, so the mail this service sends to any one
+ * address, and on behalf of any one merchant, is bounded per day.
+ */
+export const PAYMENT_RECEIPT_LIMIT_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Receipts one address gets per window, from every merchant together. A real
+ * payer rarely pays more than a handful of links a day; past this, someone is
+ * using payments to mail an address that never asked. A receipt over the limit
+ * is held, not dropped: the sweeper sends it once the window allows, within
+ * `PAYMENT_RECEIPT_RETRY_WINDOW_MS`.
+ */
+export const PAYMENT_RECEIPT_MAX_PER_RECIPIENT = 10;
+
+/**
+ * Receipts one merchant (one consumer) sends per window. Bounds an account set
+ * up to mail many addresses with tiny payments; held like the per-recipient
+ * limit. A merchant that outgrows it is a support conversation, not a default.
+ */
+export const PAYMENT_RECEIPT_MAX_PER_MERCHANT = 1000;
+
+/**
+ * The first key of the transaction-scoped advisory lock that serializes the
+ * receipt limits of one recipient (`pg_advisory_xact_lock(class, hashtext(email))`),
+ * so two replicas cannot both take the last receipt of an address's day. The
+ * two-key form, like `PAYMENT_DEPOSIT_LOCK_CLASS`: never a job lock.
+ */
+export const PAYMENT_RECEIPT_LOCK_CLASS = 881_025;

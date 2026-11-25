@@ -20,6 +20,9 @@ Conventions for this repo. They are enforced by `npm run lint`, which CI gates o
 | `npm run plugins -- <cmd>` | third-party plugin folders: `new`, `check`, `sign`, `verify`, `keygen`, `publish`, `install` (`scripts/plugins.ts`) |
 | `npm run zk:deploy-testnet` | deploys the private payments token, auditor registry and fee account on TESTNET (Friendbot, no real funds). `-- --env-file .env --secrets-file .zk-secrets/testnet.json` writes the values instead of printing secrets; run again it only verifies; `-- --redeploy` strands every payment on the old token |
 | `npm run zk:e2e-testnet` | the real-chain check of private payments on testnet: registers, proves, transfers and confirms through the module's own services. Slow (UltraHonk proofs in Node), needs the deployed set in `.env` |
+| `npm run sandbox:keys -- --out <file>` | creates the sandbox's HD seed, treasury key and cUSD deployer key in a file OUTSIDE every repo (a path inside this one is refused) and prints only the addresses |
+| `npm run sandbox:status` / `sandbox:deploy-cusd` | `-- --secrets-file <file>`: the sandbox treasury's address and balances on each test network it settles on (reads only; one EVM address, one derived key per other network); `-- --network <id>` deploys cUSD where no official test USDC exists and prints its `SANDBOX_CUSD_ADDRESSES` entry. Test networks only: every client checks the node's chain identity first (`eth_chainId`, the XRP Ledger's `network_id`, NEAR's `chain_id`, Sui's chain identifier, Aptos' `chain_id`) |
+| `npm run sandbox:prepare` | `-- --secrets-file <file> [--network <id>]`: the treasury's one-time setup where a network needs one before anyone can pay (the test USDC trustline on the XRP Ledger, the token registration on NEAR). Needs the network's gas coin first; run again it only reports |
 
 ## Imports: always use the path aliases, never relative paths
 
@@ -275,7 +278,7 @@ table. These are the rules that did not hold on their own:
 
 ## Chains and native plugins
 
-- **Stellar, Solana and Monad are one `Chain` union** (`@/chains/chains.constants`).
+- **Stellar, Solana, Monad and Arc are one `Chain` union** (`@/chains/chains.constants`).
   Anything per chain — address rules, transaction-id shapes, payment verifiers,
   message signatures, analytics labels — is a `Record<Chain, …>`, so a new chain
   does not compile until every table has its entry. A request that names no chain
@@ -284,13 +287,23 @@ table. These are the rules that did not hold on their own:
   A field that names no chain but takes any (a customer's `account`) reads the
   chain from the shape: `@IsAnyChainAddress()` to validate, `normalizeAnyChainAddress`
   to store (EIP-55 on Monad, the spelling payment intents record a payer in).
+  Arc's addresses have Monad's shape, so such a field reads a `0x` address as Monad,
+  as it did before Arc existed (`SHAPE_CHAINS` in `chain-address.ts`): an Arc wallet
+  is one a request names with `chain: arc`.
+- **Not every chain is in every table.** `SWAP_CHAINS` (Stellar, Solana, Monad) have a
+  swap venue; `RouteChain` (`Extract<Chain, CrossChainNetworkId>`, the same three) are
+  the chains the cross-chain route reaches. Arc is in neither: a table of swap venues
+  is a `Record<SwapVenueChain, …>` and a table of how the route names or pays a chain
+  is a `Record<RouteChain, …>`, so adding a chain to `CHAINS` alone does not force a
+  venue or a route on it. A feature off a chain refuses it in validation (its DTO enum
+  is `SWAP_CHAINS` or `CROSS_CHAIN_NETWORK_IDS`), never by falling through to Monad.
 - **A customer holds wallets** (`customer_wallet`, product owner 2026-10-27: one customer pays from
   several wallets on different chains). A wallet belongs to one customer of a merchant: the
   unique index is `(consumerId, chain, address)`, so a payment's payer counts toward exactly one
   customer and the payer recorded on settlement (`ensureForPayer`) is looked up by chain and
   address. `account` is the deprecated first wallet: answered from `wallets`, and on `PATCH` it
   edits that wallet only. Wallets change through their own routes, never through `PATCH`.
-- **Solana and Monad are reached only through `SolanaRpcClient` / `EvmRpcClient`**,
+- **Solana, Monad and Arc are reached only through `SolanaRpcClient` / `EvmRpcClient`**,
   which check the node's genesis hash / `eth_chainId` before trusting it. Never
   call a node URL directly. Stellar mainnet's Soroban RPC is the same rule:
   `SorobanRpcClient` (`src/stellar/soroban-rpc.client.ts`, `STELLAR_RPC_URL_MAINNET`)
@@ -338,17 +351,19 @@ table. These are the rules that did not hold on their own:
 - **Swap venues are the exception, by decision: they are core.** A same-chain
   swap is `/v1/swaps` on the chain's own venue — the Stellar DEX, Jupiter on
   Solana, Kuru Flow on Monad (`src/jupiter/`, `src/kuru/`). The Stellar DEX stays
-  in `swaps.service.ts`; every OTHER chain is one `ChainSwapVenue` in
-  `src/swaps/venues/`, held as `Record<OtherChain, ChainSwapVenue>` in
-  `chain-swaps.service.ts` (`OtherChain = Exclude<Chain, 'stellar'>`), so a new
-  chain does not compile until it has a venue. A swap between chains is
+  in `swaps.service.ts`; every OTHER swap chain is one `ChainSwapVenue` in
+  `src/swaps/venues/`, held as `Record<SwapVenueChain, ChainSwapVenue>` in
+  `chain-swaps.service.ts` (`SwapVenueChain = Exclude<SwapChain, 'stellar'>`), so a
+  chain added to `SWAP_CHAINS` does not compile until it has a venue (Arc has none,
+  and is not in `SWAP_CHAINS`). A swap between chains is
   `/v1/cross-chain-swaps` on NEAR Intents (`src/near-intents/`), which refuses
   a same-chain pair on Stellar, Solana and Monad (they have a venue above) and
   allows it on every other network. All of them are always compiled in, not
   plugins. Each aggregator only prices and builds: the wallet signs, and this
   service checks the signed transaction is the one it built before broadcasting
-  it through its own RPC. Anything per chain is a `Record<Chain, …>`
-  (`NEAR_INTENTS_BLOCKCHAINS`, `DEPOSIT_LINK_BUILDERS`, `CHAIN_SWAP_PROVIDERS`),
+  it through its own RPC. Anything per chain is a `Record` over the chains it
+  applies to (`NEAR_INTENTS_BLOCKCHAINS` and `DEPOSIT_LINK_BUILDERS` over `RouteChain`,
+  `CHAIN_SWAP_PROVIDERS` over `SwapVenueChain`),
   deposit links use this service's own SEP-7 / Solana Pay / EIP-681 builders, and
   third-party HTTP goes through `requestUpstreamJson` (`src/common/upstream-http.ts`).
 - **Cross-chain swaps reach more networks than `Chain`.** Every network NEAR
@@ -358,13 +373,106 @@ table. These are the rules that did not hold on their own:
   (`src/cross-chain-swaps/cross-chain-networks.ts`), a
   `Record<CrossChainNetworkId, …>` holding its address rule, transaction-id rule
   and deposit-link builder (null where the chain has no wallet-link standard, so
-  `depositUri` is nullable). The three settled chains keep their ids and reuse
-  `CHAIN_ADDRESS_RULES` and `DEPOSIT_LINK_BUILDERS`; the others use 1Click's
+  `depositUri` is nullable). The three settled chains it reaches (`RouteChain`) keep
+  their ids and reuse `CHAIN_ADDRESS_RULES` and `DEPOSIT_LINK_BUILDERS`; the others use 1Click's
   `blockchain` code. An EIP-681 link names a chain id from
   `CROSS_CHAIN_EVM_CHAIN_IDS` only after it was checked against chainlist and the
   chain's own `eth_chainId`: a wrong id sends the deposit to another chain. A
   1Click blockchain with no entry (`qtc`, `adi`) is never offered: an address this
   service cannot validate is a refund it cannot promise.
+- **Payment links settle on every one of those networks, and on Arc**
+  (`PAYMENT_NETWORKS` in `src/payment-intents/payment-networks.ts` is DERIVED: every
+  `Chain`, then every other `CROSS_CHAIN_NETWORK_IDS` entry; never a hand-kept second
+  list). A payment network's name and address and transaction-id rules come from
+  `PAYMENT_NETWORK_RULES` (`CROSS_CHAIN_NETWORKS` plus the chains the route does not
+  reach, `NativeOnlyChain`): never index `CROSS_CHAIN_NETWORKS` with an `intent.chain`,
+  it has no Arc. Stellar, Solana, Monad and Arc keep their wallet links and verifiers; a
+  link on any other network (`DepositNetwork`) has no verifier of ours and is paid
+  only through `payment_deposit` rows: an EXACT_OUTPUT 1Click quote per payer that
+  pays the intent's destination exactly its amount, polled by
+  `PaymentDepositObserverService`, whose SUCCEEDED settles the intent
+  (`settleFromDeposit`, the payout hash as `txHash`, `paidFrom` written with the
+  status). Code that reads `intent.chain` goes through `paymentNetworkOf` and
+  `isChain` before reaching a `Record<Chain, …>` (verifiers, `PAY_TO`, tx-id rules):
+  the chain observer never scans a deposit network, `validate` and a PATCHed
+  `txHash` are refused there. A link on Stellar, Solana or Monad takes deposits too only
+  with `crossChainFeeBps` recorded at create (mainnet, no merchant fee, not an
+  EVM link found by amount), and an Arc link never does (`isRoutedNetwork`, checked
+  first by `crossChainPaymentRefusal`), because the deposit routes are keyless and
+  the plan rate comes from a header. A link with no amount is paid for the amount
+  the payer types (`requestedAmountOut`); a merchant fee on a deposit network is
+  the route's own app fee (`merchantAppFee`, a route account, never an on-chain
+  address of the link's network); `PaymentRouteProbe` dry-quotes the main origins
+  for minimums and never blocks a link. Every deposit carries the payer's email,
+  and `PaymentReceiptsService` mails the receipt on `PAYMENT_INTENT_SUCCEEDED`
+  (claimed by `receiptClaimedAt`, retried by `PaymentReceiptSweeperService`).
+  That email is typed on a keyless route and never verified (security review,
+  2026-11-16, final design), so: each hosted checkout session records its own
+  (`payment_payer_session`, keyed by the SHA-256 of a random `payerToken` only
+  its browser holds; the token is never stored or logged), no session can change
+  another's and none is ever refused for another's email; a deposit belongs to
+  the session that opened it, which is its proof; a native payment's receipt goes
+  to the session whose wallet transaction (registered with its token on
+  `events`) matches the settlement's `txHash`; a registered account proves
+  nothing, since an address is public before it pays and anyone could register
+  a merchant's known payer ahead of time (security review, 2026-11-24) (registered at least
+  `PAYMENT_PAYER_PROOF_MARGIN_MS` before the transaction's on-chain time,
+  `paidOnChainAt`, never when that time is unknown: fail closed; matched by that
+  session alone; a hash the observer already saw is refused),
+  else to the only session if exactly one gave an email (receipt only, no
+  customer link), else nobody (`receiptRecipient`, `receiptSkippedAt`); a `sent`
+  report is informational and decides nothing; a customer is linked only on a
+  proof; a receipt carries only what this service generates (no
+  `msg`, no merchant text; its only links are our checkout page and the
+  explorer, `paymentExplorerTxUrl`) and is booked against
+  `PAYMENT_RECEIPT_MAX_PER_RECIPIENT` / `PAYMENT_RECEIPT_MAX_PER_MERCHANT` a day
+  under a per-recipient advisory lock; and `linkPayerEmail` attaches only to a
+  customer made from payer input, never to one the merchant created. A deposit
+  is stored on its link's tier (`intent.network`), and each tier has its own
+  observer. Open deposits are capped per client
+  (`PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT`: an IPv4 address or an IPv6 /48, stored as
+  an HMAC, `409`), and NEW deposits per link are a refilling creation budget
+  (`PAYMENT_DEPOSIT_LINK_BUDGET` per `PAYMENT_DEPOSIT_LINK_WINDOW_MS`, `429` with
+  `Retry-After`). A merchant may raise both per link (`depositLimits`), never past
+  `PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT_CEILING` / `PAYMENT_DEPOSIT_LINK_BUDGET_CEILING`,
+  and never below the defaults. Never a hard cap on a link's open deposits: anyone holding the id
+  could fill it and lock the real payer out (security review, 2026-11-16; product
+  decision, do not reintroduce). An unpaid deposit past its deadline counts for
+  nothing. Both checks are one step: a slot is reserved under the link's advisory
+  lock (`pg_advisory_xact_lock(PAYMENT_DEPOSIT_LOCK_CLASS, hashtext(id))`) before
+  the live quote and released after it, so concurrent creates cannot all pass
+  the count and the slow quote holds no lock or connection.
+- **On the test networks those links settle in the sandbox** (`src/sandbox-settlement/`):
+  the cross-chain route has no test network, so `PaymentDepositPricing` hands every
+  `network: 'testnet'` request to `SandboxDepositRoute`, which answers the same quote shape
+  (one for one in the network's test stablecoin, no commission, `crossChainFeeBps` 0) with a
+  deposit address derived from `SANDBOX_DEPOSIT_SEED` (its path is the `correlationId`; no key
+  is stored), and `SandboxDepositObserverService` feeds the same `applyProviderStatus`. Payouts
+  and refunds come from `SANDBOX_TREASURY_PRIVATE_KEY`: each is signed and written to
+  `sandbox_payout` (unique per deposit and kind) BEFORE it is broadcast, and only that row's
+  bytes are ever rebroadcast; never sign a second transaction for a deposit. The treasury key is
+  never the Monad or Arc relayer's (the boot refuses it) and every sandbox RPC is checked against the
+  chain id in `SANDBOX_NETWORKS`, so it cannot reach mainnet. A test network goes into that
+  table only after its chain id was checked on chainlist and `eth_chainId` and its test USDC
+  answered `symbol`/`decimals` on-chain; where there is no official test USDC it uses cUSD
+  (`contracts/SandboxUsd.sol`), enabled per network by `SANDBOX_CUSD_ADDRESSES`.
+  What is read and signed per kind of network is a `SandboxLedger` (`sandbox-ledger.ts`;
+  `SandboxLedgers` is a `Record<SandboxLedgerKind, …>`): EVM, XRP Ledger, NEAR, Sui and
+  Aptos. The settler keeps every decision; a ledger never decides a status and never
+  signs twice for one row. On a network that is not EVM the treasury is
+  `treasurySubkey` (HKDF-SHA256 of `SANDBOX_TREASURY_PRIVATE_KEY`, labelled with the
+  network) and deposit keys are SLIP-0010 ed25519 under the network's SLIP-44 coin type,
+  so no new variable exists; changing the HKDF salt or label moves every such treasury.
+  The XRP Ledger takes deposits at the treasury itself with a destination tag per payment
+  (`depositMemo`): a per-payment account would need a reserve and a trustline before
+  anyone could pay it. A transfer that provably can no longer execute (past an XRP Ledger
+  `LastLedgerSequence`, a NEAR block hash or an Aptos expiration, or whose Sui input
+  objects were spent at a later version) is `failed`, never re-signed. A ledger's
+  `blocker` (treasury short, recipient without a trustline) makes the deposit wait
+  without signing anything. Sui is read through GraphQL (`graphql.testnet.sui.io`): its
+  public fullnodes stopped answering JSON-RPC. Starknet is not settled: its test USDC
+  exists, but it needs Stark-curve signing, Poseidon/Pedersen hashing and a deployed
+  treasury account. Scroll is not settled either: its test network was shut down.
 - **Monad swaps with a merchant fee go through `contracts/MerchantFeeSwapRouter.sol`**
   (`KURU_MERCHANT_FEE_ROUTER`), one deployment per Kuru Flow router, with no owner. It
   is not a deposit address: wallets approve it and send it value, so the venue checks
@@ -374,7 +482,7 @@ table. These are the rules that did not hold on their own:
   calls nothing but its immutable `aggregator` and the two tokens, pulls only from
   the caller and leaves no allowance; keep all three when changing it, and a changed
   router is a new deployment the operator points the variable at.
-- **Monad deposit addresses are `CREATE2` addresses of
+- **Monad and Arc deposit addresses are `CREATE2` addresses of
   `contracts/PaymentForwarder.sol`**, or, for an intent with a merchant fee, of
   `contracts/PaymentSplitForwarder.sol` (two more constructor arguments: the
   fee's wallet and amount; the row's `feeWallet` / `merchantFee` say which), so
@@ -389,7 +497,34 @@ table. These are the rules that did not hold on their own:
   money stays safe but stuck until the old artifact is restored. The relayer key
   signs only forwarder deployments and
   flushes; it must never gain another use, because "it holds gas money only" is
-  the whole security argument.
+  the whole security argument. There is one relayer key per EVM chain
+  (`MONAD_RELAYER_PRIVATE_KEY`, `ARC_RELAYER_PRIVATE_KEY`; the boot refuses the same
+  key for both), one forwarder job for all
+  of them (`EvmDepositForwarderService`, lock `881_011`, each row's `chain` picking its
+  RPC and relayer), and neither a relayer bid nor a quoted deposit fee ever goes under
+  the chain's mempool floor (`EVM_MIN_MAX_FEE_PER_GAS`: Arc drops anything under 20 gwei
+  without an error). A deployed forwarder is flushed only for a balance worth the gas
+  (`flushJustified`: above the row's fee, or a whole payment where the asset has no
+  price): a flush pays the relayer nothing, and dust would make it burn gas. An Arc
+  link exists ONLY with a deposit address (`EVM_DIRECT_PAY_LINKS`, security review
+  2026-11-24): a direct EIP-681 link is matched by destination, asset and amount, which
+  let one payer settle another's older intent and another tenant take a merchant's
+  payments first come. Without `ARC_RELAYER_PRIVATE_KEY` the create refuses Arc
+  (`400 network_unsupported`) and the networks catalog reports it unavailable, both
+  through `evmPayLinkRefusal`; Monad keeps its direct mode.
+- **Arc's USDC is its gas coin, charged through its ERC-20 interface.** One balance has
+  two views: 18 decimals native, 6 through `0x3600…` (`ARC_USDC`, whose `balanceOf`
+  truncates dust). An Arc link never charges the bare coin: an omitted asset, `native`
+  and `USDC` resolve to that contract in 6 decimals (`evmPresetOf`, with EURC the other
+  preset per tier in `EVM_TOKEN_PRESETS`). A payer's wallet may send it either way, and
+  Arc logs every native movement once from its system emitter (EIP-7708,
+  `ARC_TRANSFER_EMITTER`, 18 decimals) while an ERC-20 transfer is ALSO logged by the
+  token (6). So the verifier reads ONLY the emitter's log for USDC (`gasCoinOf`,
+  `loggedAmount`, cut to 6 decimals): reading both would count one payment twice, and
+  reading only the token's would miss a value transfer. Gas is paid in USDC, so a USDC
+  deposit's relayer fee is priced from the gas price (in 6 decimals) unless
+  `ARC_DEPOSIT_TOKEN_FEES` names one. Each of these was read on Arc's own nodes
+  (2026-11-18): change them only after reading them there again.
 
 ## Security invariants a change must keep
 
@@ -439,6 +574,13 @@ Each of these was a real finding in this codebase, not a hypothetical:
   their deposits and read its USDT0 transfers, and a production key read its test-network
   private payments, until they did. Another network's row is the 404 of a missing one. A new
   by-id lookup of a network-scoped row takes the network too.
+- **`FAILED` needs a failed transaction that is bound to the intent.** Only Stellar
+  (memo) and Solana (reference) report `failedOnChain`. A reverted EVM transaction
+  carries nothing of the intent's (payee, token and amount are public), so anyone
+  could revert a `transfer(payee, amount)` for the price of gas and, through
+  `validate`, make the intent `FAILED`, which is final: `EvmVerifierService` checks
+  the receipt's status before any match and answers a reverted one as a plain
+  mismatch, on Monad and Arc alike.
 - **A route whose cost an error cannot refund — XLM spent, an account created
   on-chain — carries `@RateLimit`.**
 - **A submit route relays only a transaction this service built, for the same
@@ -473,6 +615,61 @@ Each of these was a real finding in this codebase, not a hypothetical:
   platform + resolver key pair still drains every auto-policy payment), and the
   contract id a buyer pays into is derived from the deploy the platform signed,
   never read from Trustless Work's answer.
+- **A P2P payment request turns `paid` only on what the marketplace itself says: its
+  signed webhook, or its answer to this service's own read of a direct order.**
+  `POST /v1/onramp/p2p/webhooks` (`@Public()`, out of the contract) checks
+  `sha256(rawBody)` against `x-webhook-hash`, then the RSA signature of that hex
+  against each network's JWKS (`P2pWebhookKeys`): the network whose key verifies is
+  the only one whose sessions the delivery may touch. Every write is conditional
+  (`completedAt: null`, `paidAt: null`), and a completion pays a request only as a
+  `BUY` to its address, chain and token, paid in its currency and for at least its
+  amount (`completionProblem`: the widget lets a buyer change both, and 15000 COP is
+  not 15000 ARS). The payer's keyless routes
+  (`/v1/payment-links/fiat/{id}`) answer a field-by-field projection
+  (`toPublicPaymentRequest`), never the owner, the seller's address, the record token,
+  sessions or hashes; the purchase they open belongs to the request's consumer, and
+  the stored `sharedPublicKey` decides its referral id.
+- **A direct P2P order is bounded by its payment request, and the payer's marketplace
+  token never rests here.** The keyless `/v1/payment-links/fiat/{id}/direct/*`
+  (`P2pDirectService`) opens an order only for the request's own amount, token, chain
+  and address, with the request id as `externalReferenceId`, and reads, marks paid or
+  cancels one only when its `externalReferenceId` is that request (else the 404 of a
+  missing order). The payer's bearer token travels only sealed in `X-Payer-Session`
+  (`p2p-direct-session.ts`: AES-256-GCM under `P2P_DIRECT_SESSION_SECRET`, bound to the
+  request and its network, two hours at most). Nothing about the payer (email, name,
+  account, document, token) is stored or logged: every call is `requestUpstreamJson`
+  with `personalData`, which logs a refusal by its key names and error code only and
+  hands it back for `directRefusal` to map, never relaying the marketplace's text. The
+  webhook finds a direct order's session by `providerOrderId` under its
+  `paymentRequestId`; a CANCELLED order reopens its request only when
+  `processingSessionId` names that session, and a bank transfer's `markProcessing`
+  clears the field, so money that arrived is never reopened. A read of a direct order
+  (through the payer's session, from the marketplace's API, never a value the payer
+  sent) that finds it COMPLETED or CANCELLED goes through the webhook's own
+  `P2pOrderEventsService.apply`, `completionProblem` included; never a second settle
+  path. Marking an order paid sets `processingUntil` (its due time plus
+  `P2P_DIRECT_PROCESSING_GRACE_MS`), and `P2pDirectProcessingSweepService` reopens a
+  request still `processing` past it: the order cannot be read without the payer's
+  token, which is never stored. The sign-in that emails a code is budgeted per email
+  address (an HMAC under a key derived from `P2P_DIRECT_SESSION_SECRET`,
+  `loginEmailSubject`) and per request through `RateLimitService`, beside the route's
+  per-client budget: an address budget alone let anyone rotating addresses mail one
+  inbox without end.
+- **A bank transfer moves a payment request only on the partner's signed webhook, and
+  only to the transfer that deposit names** (native plugin `koywe`). `POST
+  /v1/onramp/transfer/webhooks` checks `Koywe-Signature` (HMAC-SHA256 of the raw body)
+  against each network's webhook secret in constant time; the one that verifies is the
+  only network the delivery may touch, and its envelope id is stored first (a
+  redelivery changes nothing). A deposit pays the open transfer of the same document
+  HMAC at the same merchant asking exactly its amount, or the depositor's only open
+  transfer there when it covers it; anything else stays `unmatched` for ops
+  (`matchDeposit`), and every open transfer of one depositor at one merchant asks a
+  different amount (`distinctAmount`), so a larger deposit is never attributed to the
+  wrong charge. The payer's document is never stored or logged: only its HMAC under
+  `KOYWE_DOCUMENT_PEPPER` and three digits; a provider error that may echo a tax id is
+  masked (`redactDigits`) before it is logged or relayed. Payment requests are another
+  plugin's table: `koywe` reaches them only through the core's `PaymentRequestRails`
+  (the ledger `eldorado` registers), never through Prisma.
 - **Input a provider SDK cannot carry is the caller's `400`, refused in the DTO.**
   `@defindex/sdk` takes amounts as JS numbers; an amount past
   `Number.MAX_SAFE_INTEGER` was checked inside the provider call and answered
@@ -496,7 +693,8 @@ invites a wallet to register where it was not meant to. `src/config/identity-env
 refuses to boot a recovery server holding `WALLET_RECOVERY_SPONSOR_SECRET` or
 `APISIX_ADMIN_KEY`, and any deployment where two boundary secrets
 (`APISIX_GATEWAY_SECRET`, `WALLET_AUTH_SESSION_SECRET`, `APISIX_ADMIN_KEY`,
-`WALLET_BACKUP_ENCRYPTION_KEY`, `RECOVERY_JWT_SECRET`) share a value. Do not relax
+`WALLET_BACKUP_ENCRYPTION_KEY`, `RECOVERY_JWT_SECRET`, `P2P_DIRECT_SESSION_SECRET`)
+share a value. Do not relax
 either: the two servers' independence IS the design, and a shared value is one leak
 that breaks two boundaries.
 
@@ -861,7 +1059,7 @@ How failures get documented — use these, never a hand-written
 | validates input, is gated, takes a `{param}`, or can throw at all | nothing | 400 / 401 + 403 / 404 / 500, attached by `swagger.ts` |
 | is `@Public()` | nothing — the decorator does it | `security: []`, no 401/403 |
 | is `@RateLimit(...)` | nothing — the decorator does it | 429 + `Retry-After`, `ratelimit-*` on 2xx |
-| calls a third party while serving — any `UpstreamProvider`, by what it is: `Fiat partner`, `Horizon`, `Solana`, `Monad`, `Cross-chain route`, `Solana swap route`, `Monad swap route`, `Soroban RPC`, `Vault protocol`, `Protected-payments service`, `P2P marketplace` | `@ApiUpstream('Fiat partner', …)` on **that handler**, naming each one it reaches | 502/503/504 per provider (Horizon: 503 only — `UPSTREAM_FAILURES` in `src/swagger.ts`) |
+| calls a third party while serving: any `UpstreamProvider`, by what it is: `Fiat partner`, `Horizon`, `Solana`, `Monad`, `Arc`, `Cross-chain route`, `Solana swap route`, `Monad swap route`, `Soroban RPC`, `Vault protocol`, `Protected-payments service`, `P2P marketplace` | `@ApiUpstream('Fiat partner', …)` on **that handler**, naming each one it reaches | 502/503/504 per provider (Horizon: 503 only, `UPSTREAM_FAILURES` in `src/swagger.ts`) |
 | throws a code of its own (409, a domain 400, a kill-switch 403) | `@ApiErrorResponse({ status, codes })` | that status with one real example per code |
 
 - **A new `ApiErrorCode` needs an entry in `API_ERROR_CASES`**

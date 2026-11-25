@@ -53,7 +53,7 @@ export function buildSwaggerConfig(openapi: AppConfig['openapi']) {
     .setTitle('Cosmos Pay Payments API')
     .setDescription(
       'Payments API for merchants and wallets. It covers: payment intents ' +
-        'on Stellar, Solana and Monad (with payment links, customers and a ' +
+        'on every network payment links settle on (with payment links, customers and a ' +
         'product catalog); swaps on Stellar (path payments), Solana and ' +
         'Monad, cross-chain swaps across Stellar, Solana, Monad and other ' +
         'networks, and USDT0 transfers from Stellar to EVM networks through ' +
@@ -222,6 +222,8 @@ const TAG_DESCRIPTIONS: Record<string, string> = {
   onramp: 'Fiat in: quotes, payins and virtual accounts.',
   'p2p-onramp':
     'Stablecoins bought with local money from P2P sellers: the market, a firm quote, and sessions that open a hosted purchase delivered to the address you name.',
+  'bank-transfers':
+    'Charges in pesos paid by bank transfer: your bank transfer account, opened in your name and verified on a hosted form, which payers of your QR charges transfer to.',
   offramp: 'Fiat out: quotes and payouts.',
   'p2p-offramp':
     'Stablecoins sold for local money to P2P buyers: the market, a firm quote, and sessions that open a hosted sale paid with the method you choose.',
@@ -338,7 +340,7 @@ type SharedErrorResponse = keyof typeof SHARED_ERROR_RESPONSES;
  * Which statuses each provider can fail with. Horizon (and the Soroban RPC) is
  * reached through the Stellar SDK, which this service wraps in a plain `503`: it has no timeout
  * of its own to report and no body to pass through — while the HTTP clients
- * (BlindPay's, NEAR Intents', and the Solana and Monad JSON-RPC transport) distinguish
+ * (BlindPay's, NEAR Intents', and the Solana, Monad and Arc JSON-RPC transport) distinguish
  * "refused" (502), "down" (503) and "timed out" (504).
  */
 const UPSTREAM_FAILURES: Record<
@@ -349,6 +351,7 @@ const UPSTREAM_FAILURES: Record<
   Horizon: ['UpstreamUnavailable'],
   Solana: ['UpstreamError', 'UpstreamUnavailable', 'UpstreamTimeout'],
   Monad: ['UpstreamError', 'UpstreamUnavailable', 'UpstreamTimeout'],
+  Arc: ['UpstreamError', 'UpstreamUnavailable', 'UpstreamTimeout'],
   'Cross-chain route': [
     'UpstreamError',
     'UpstreamUnavailable',

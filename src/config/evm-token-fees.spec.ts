@@ -24,3 +24,16 @@ describe('parseEvmTokenFees', () => {
     expect(() => parseEvmTokenFees(raw)).toThrow(/MONAD_DEPOSIT_TOKEN_FEES/);
   });
 });
+
+describe('parseEvmTokenFees for Arc', () => {
+  it('names the variable it parses in every refusal', () => {
+    expect(() => parseEvmTokenFees('[]', 'ARC_DEPOSIT_TOKEN_FEES')).toThrow(
+      'ARC_DEPOSIT_TOKEN_FEES must be a JSON object',
+    );
+    expect(() =>
+      parseEvmTokenFees('{"0x12": "1"}', 'ARC_DEPOSIT_TOKEN_FEES'),
+    ).toThrow(/^ARC_DEPOSIT_TOKEN_FEES: "0x12"/);
+    // Monad's name stays the default.
+    expect(() => parseEvmTokenFees('[]')).toThrow(/^MONAD_DEPOSIT_TOKEN_FEES/);
+  });
+});

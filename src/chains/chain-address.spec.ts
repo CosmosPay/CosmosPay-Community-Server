@@ -64,22 +64,32 @@ describe('CHAIN_ADDRESS_RULES', () => {
     stellar: STELLAR,
     solana: SOLANA,
     monad: MONAD,
+    arc: MONAD,
   };
+  /** Monad and Arc share one shape (0x + 40 hex): one family of addresses. */
+  const family = (chain: (typeof CHAINS)[number]) =>
+    chain === 'arc' ? 'monad' : chain;
 
   it.each(CHAINS)('accepts %s’s own address and no other chain’s', (chain) => {
     for (const other of CHAINS) {
-      expect(isAddressForChain(chain, valid[other])).toBe(other === chain);
+      expect(isAddressForChain(chain, valid[other])).toBe(
+        family(other) === family(chain),
+      );
     }
   });
 
   it('stores an EVM address in one spelling whatever case it arrived in', () => {
     expect(normalizeAddress('monad', MONAD.toLowerCase())).toBe(MONAD);
+    expect(normalizeAddress('arc', MONAD.toLowerCase())).toBe(MONAD);
     expect(normalizeAddress('stellar', STELLAR)).toBe(STELLAR);
     expect(normalizeAddress('solana', SOLANA)).toBe(SOLANA);
   });
 
   it('names what each chain expects', () => {
     expect(CHAIN_ADDRESS_RULES.monad.expected).toMatch(/0x/);
+    expect(CHAIN_ADDRESS_RULES.arc.expected).toBe(
+      'a valid Arc (EVM) address (0x + 40 hex)',
+    );
   });
 });
 
@@ -91,6 +101,8 @@ describe('an address on any chain', () => {
     expect(chainOfAddress(SOLANA)).toBe('solana');
     expect(chainOfAddress(MONAD)).toBe('monad');
     expect(chainOfAddress(MONAD.toLowerCase())).toBe('monad');
+    // Arc shares Monad's shape: a field that names no chain reads it as Monad,
+    // as it did before Arc existed, never as "two chains, so none".
     // The same key spelled for Solana is a Solana address, not a Stellar one.
     const kp = Keypair.random();
     expect(chainOfAddress(kp.publicKey())).toBe('stellar');

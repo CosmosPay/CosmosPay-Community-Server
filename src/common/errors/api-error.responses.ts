@@ -118,6 +118,13 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     message: 'A swap already exists for this Idempotency-Key',
     path: '/v1/swaps',
   },
+  [ApiErrorCode.PayerSessionUnknown]: {
+    statuses: [400],
+    summary: 'The checkout session is not one of this link',
+    message:
+      'This checkout session is not known for this payment link: give the email again.',
+    path: '/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/deposits',
+  },
   [ApiErrorCode.OperationInFlight]: {
     statuses: [409],
     summary: 'A conflicting operation is still settling',
@@ -574,6 +581,158 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     message:
       "The signature does not verify against the payment's buyer address.",
     path: '/v1/protected-payment-links/3f1c2b7e-8d4a-4c1e-9b2f-6a5d4c3b2a10/dispute',
+  },
+
+  // --- P2P payment requests (native plugin `eldorado`) ---------------------
+  [ApiErrorCode.RequestClosed]: {
+    statuses: [409],
+    summary: 'The payment request was paid, cancelled or expired',
+    message:
+      'Payment request cmh4x2k9a0001l70g8v5q3z2w is expired: it can no longer be paid',
+    path: '/v1/payment-links/fiat/cmh4x2k9a0001l70g8v5q3z2w/sessions',
+  },
+  [ApiErrorCode.WebhookSignatureInvalid]: {
+    statuses: [401],
+    summary: 'The webhook body hash or signature does not verify',
+    message: 'Invalid webhook signature',
+    path: '/v1/onramp/p2p/webhooks',
+  },
+
+  // --- payment requests paid by bank transfer (native plugin `koywe`) -------
+  [ApiErrorCode.InvalidDocument]: {
+    statuses: [400],
+    summary: 'The document is neither a valid CUIT/CUIL nor a DNI',
+    message:
+      'document must be a CUIT/CUIL (11 digits with a valid check digit) or a DNI (7 or 8 digits)',
+    path: '/v1/payment-links/fiat/cmh4x2k9a0001l70g8v5q3z2w/transfers',
+  },
+  [ApiErrorCode.MethodUnavailable]: {
+    statuses: [400],
+    summary: 'The payment request cannot be paid by that method',
+    message:
+      'Payment request cmh4x2k9a0001l70g8v5q3z2w cannot be paid by bank transfer',
+    path: '/v1/payment-links/fiat/cmh4x2k9a0001l70g8v5q3z2w/transfers',
+  },
+  [ApiErrorCode.TransferUnavailable]: {
+    statuses: [503],
+    summary: 'Bank transfers cannot be offered right now',
+    message:
+      'Bank transfers are not available right now: retry shortly or pay with another method.',
+    path: '/v1/payment-links/fiat/cmh4x2k9a0001l70g8v5q3z2w/transfers',
+  },
+  [ApiErrorCode.AccountRequired]: {
+    statuses: [403],
+    summary: 'The shared public key cannot hold a bank transfer account',
+    message:
+      'Accepting bank transfers needs a Cosmos Pay account: sign in to use your own API key.',
+    path: '/v1/onramp/transfer/account',
+  },
+  [ApiErrorCode.AccountExists]: {
+    statuses: [409],
+    summary: 'A bank transfer account already exists',
+    message:
+      'This account already has a bank transfer account (pending): only a rejected one can be submitted again.',
+    path: '/v1/onramp/transfer/account',
+  },
+  [ApiErrorCode.InvalidTaxId]: {
+    statuses: [400],
+    summary: 'The tax id is not a valid CUIT/CUIL for the account type',
+    message:
+      'taxId must be a CUIT or CUIL: 11 digits whose check digit verifies (a company: a CUIT starting 30, 33 or 34)',
+    path: '/v1/onramp/transfer/account',
+  },
+
+  // --- payment requests paid from the payer's page, P2P (direct, `eldorado`) --
+  [ApiErrorCode.SessionExpired]: {
+    statuses: [401],
+    summary: 'The payer session expired or belongs to another payment request',
+    message: 'The payer session expired: verify your email again.',
+    path: '/v1/payment-links/fiat/cmh4x2k9a0001l70g8v5q3z2w/direct/kyc',
+  },
+  [ApiErrorCode.P2pUnavailable]: {
+    statuses: [503],
+    summary: 'Paying through the P2P marketplace is not available right now',
+    message:
+      'Paying through a verified seller is not available right now: retry shortly or pay with another method.',
+    path: '/v1/payment-links/fiat/cmh4x2k9a0001l70g8v5q3z2w/direct/login',
+  },
+  [ApiErrorCode.InvalidEmail]: {
+    statuses: [400],
+    summary: 'The email is not an email address',
+    message: 'email must be an email address',
+    path: '/v1/payment-links/fiat/cmh4x2k9a0001l70g8v5q3z2w/direct/login',
+  },
+  [ApiErrorCode.InvalidCode]: {
+    statuses: [400],
+    summary: 'The code is wrong, expired or malformed',
+    message: 'The code is wrong or expired.',
+    path: '/v1/payment-links/fiat/cmh4x2k9a0001l70g8v5q3z2w/direct/login/verify',
+  },
+  [ApiErrorCode.InvalidPhone]: {
+    statuses: [400],
+    summary: 'The phone is not an Argentine number',
+    message:
+      'phone must be an Argentine number: 10 digits with the area code, optionally after +54.',
+    path: '/v1/payment-links/fiat/cmh4x2k9a0001l70g8v5q3z2w/direct/kyc/details',
+  },
+  [ApiErrorCode.InvalidAccount]: {
+    statuses: [400],
+    summary: 'The bank account to pay from cannot be sent',
+    message: "account.holder must be the account holder's name",
+    path: '/v1/payment-links/fiat/cmh4x2k9a0001l70g8v5q3z2w/direct/orders',
+  },
+  [ApiErrorCode.InvalidCbu]: {
+    statuses: [400],
+    summary: 'The CVU/CBU is not 22 digits whose check digits verify',
+    message:
+      'account.cbu must be a CVU or CBU: 22 digits whose two check digits verify',
+    path: '/v1/payment-links/fiat/cmh4x2k9a0001l70g8v5q3z2w/direct/orders',
+  },
+  [ApiErrorCode.InvalidBank]: {
+    statuses: [400],
+    summary: 'The bank is not one an ARS account can be at',
+    message: 'account.bank must be one of the listed banks',
+    path: '/v1/payment-links/fiat/cmh4x2k9a0001l70g8v5q3z2w/direct/orders',
+  },
+  [ApiErrorCode.Rejected]: {
+    statuses: [400],
+    summary: 'The P2P marketplace refused the request',
+    message: 'The request was refused. Check the details and try again.',
+    path: '/v1/payment-links/fiat/cmh4x2k9a0001l70g8v5q3z2w/direct/orders',
+  },
+  [ApiErrorCode.KycRequired]: {
+    statuses: [409],
+    summary: 'The payer has not finished verifying their identity',
+    message: 'Verify your identity before paying.',
+    path: '/v1/payment-links/fiat/cmh4x2k9a0001l70g8v5q3z2w/direct/orders',
+  },
+  [ApiErrorCode.TooManyOrders]: {
+    statuses: [409],
+    summary: 'The payer already has two payments in progress',
+    message:
+      'You already have two payments in progress: finish or cancel one before starting another.',
+    path: '/v1/payment-links/fiat/cmh4x2k9a0001l70g8v5q3z2w/direct/orders',
+  },
+  [ApiErrorCode.NoSellers]: {
+    statuses: [503],
+    summary: 'No verified seller can take this payment right now',
+    message:
+      'No verified seller can take this payment right now: retry shortly.',
+    path: '/v1/payment-links/fiat/cmh4x2k9a0001l70g8v5q3z2w/direct/orders',
+  },
+  [ApiErrorCode.OrderNotPayable]: {
+    statuses: [409],
+    summary: 'The order is not waiting for the transfer',
+    message:
+      'This order is matching: only an order waiting for your transfer can be marked paid.',
+    path: '/v1/payment-links/fiat/cmh4x2k9a0001l70g8v5q3z2w/direct/orders/0b8f4c6e-2a71-4c1e-9d3b-5f7a8e9c1d20/paid',
+  },
+  [ApiErrorCode.OrderNotCancellable]: {
+    statuses: [409],
+    summary: 'The order was paid or ended, so it cannot be cancelled',
+    message:
+      'This order is confirming: only an order you have not paid yet can be cancelled.',
+    path: '/v1/payment-links/fiat/cmh4x2k9a0001l70g8v5q3z2w/direct/orders/0b8f4c6e-2a71-4c1e-9d3b-5f7a8e9c1d20/cancel',
   },
 
   // --- service --------------------------------------------------------------

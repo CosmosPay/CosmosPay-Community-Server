@@ -20,7 +20,7 @@ import {
   getSchemaPath,
 } from '@nestjs/swagger';
 import type { Request } from 'express';
-import { type Chain, DEFAULT_CHAIN } from '@/chains/chains.constants';
+import { DEFAULT_CHAIN, type SwapChain } from '@/chains/chains.constants';
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
 import { AllowPublicKey } from '@/common/decorators/allow-public-key.decorator';
 import { ApiErrorResponse } from '@/common/decorators/api-error-response.decorator';
@@ -64,8 +64,9 @@ const eitherOf = (stellar: Type<unknown>, chain: Type<unknown>) => ({
 });
 
 /** No `chain` means Stellar, exactly as before the field existed. */
-const isStellar = (chain: Chain | undefined): chain is 'stellar' | undefined =>
-  (chain ?? DEFAULT_CHAIN) === 'stellar';
+const isStellar = (
+  chain: SwapChain | undefined,
+): chain is 'stellar' | undefined => (chain ?? DEFAULT_CHAIN) === 'stellar';
 
 // URI versioning => /v1/swaps
 //

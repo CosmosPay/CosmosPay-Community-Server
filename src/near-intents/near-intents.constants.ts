@@ -1,14 +1,15 @@
-import type { Chain } from '@/chains/chains.constants';
+import type { RouteChain } from '@/cross-chain-swaps/cross-chain-swaps.constants';
 
 /**
  * What 1Click calls each of our chains in `TokenResponse.blockchain`. A
- * `Record` over the chain union, so a chain added to `CHAINS` does not compile
- * until it says whether — and as what — NEAR Intents reaches it. Checked
+ * `Record` over the chains the route reaches (`RouteChain`: a chain added to
+ * `CHAINS` and to `CROSS_CHAIN_NETWORK_IDS` does not compile until it says as
+ * what NEAR Intents reaches it; Arc, which it does not reach, has none). Checked
  * against `GET /v0/tokens` (2026-09-30): Stellar lists XLM and USDC, Solana SOL
  * and SPL tokens, Monad MON, USDC and USDT0. The other networks cross-chain
  * swaps reach are named by 1Click's own code in `CROSS_CHAIN_NETWORKS`.
  */
-export const NEAR_INTENTS_BLOCKCHAINS: Record<Chain, string> = {
+export const NEAR_INTENTS_BLOCKCHAINS: Record<RouteChain, string> = {
   stellar: 'stellar',
   solana: 'sol',
   monad: 'monad',

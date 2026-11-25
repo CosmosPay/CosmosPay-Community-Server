@@ -32,13 +32,19 @@
     "openapi:generate": "ts-node -r tsconfig-paths/register --transpile-only scripts/generate-openapi.ts",
     "openapi:check": "npm run openapi:generate && git diff --exit-code -- openapi/openapi.json openapi/openapi.yaml",
     "readme:check": "ts-node -r tsconfig-paths/register --transpile-only scripts/check-readme-routes.ts",
+    "bank-transfer:webhook": "ts-node -r tsconfig-paths/register --transpile-only scripts/bank-transfer-webhook.ts",
+    "bank-transfer:simulate": "ts-node -r tsconfig-paths/register --transpile-only scripts/bank-transfer-simulate.ts",
     "backups:reencrypt": "ts-node -r tsconfig-paths/register --transpile-only scripts/reencrypt-wallet-backups.ts",
     "webhooks:audit-destinations": "ts-node -r tsconfig-paths/register --transpile-only scripts/mark-blocked-webhook-endpoints.ts",
     "seed:request-logs": "ts-node -r tsconfig-paths/register --transpile-only scripts/seed-request-logs.ts",
     "plugins": "node --no-node-snapshot -r ts-node/register/transpile-only -r tsconfig-paths/register scripts/plugins.ts",
     "assets:verify": "ts-node -r tsconfig-paths/register --transpile-only scripts/verify-assets.ts",
     "import:platform-wallet-data": "ts-node -r tsconfig-paths/register --transpile-only scripts/import-platform-wallet-data.ts",
-    "contracts:compile": "ts-node -r tsconfig-paths/register --transpile-only scripts/compile-contracts.ts && prettier --write src/evm/payment-forwarder.artifact.ts src/evm/payment-split-forwarder.artifact.ts src/evm/merchant-fee-swap-router.artifact.ts",
+    "contracts:compile": "ts-node -r tsconfig-paths/register --transpile-only scripts/compile-contracts.ts && prettier --write src/evm/payment-forwarder.artifact.ts src/evm/payment-split-forwarder.artifact.ts src/evm/merchant-fee-swap-router.artifact.ts src/evm/sandbox-usd.artifact.ts",
+    "sandbox:keys": "ts-node -r tsconfig-paths/register --transpile-only scripts/sandbox/generate-keys.ts",
+    "sandbox:deploy-cusd": "ts-node -r tsconfig-paths/register --transpile-only scripts/sandbox/deploy-cusd.ts",
+    "sandbox:status": "ts-node -r tsconfig-paths/register --transpile-only scripts/sandbox/status.ts",
+    "sandbox:prepare": "ts-node -r tsconfig-paths/register --transpile-only scripts/sandbox/prepare.ts",
     "zk:deploy-testnet": "ts-node -r tsconfig-paths/register --transpile-only scripts/zk/deploy-testnet.ts",
     "zk:e2e-testnet": "ts-node -r tsconfig-paths/register --transpile-only scripts/zk/e2e-testnet.ts"
   },
@@ -109,7 +115,10 @@
     "solc": {
       "tmp": "0.2.7"
     },
-    "toml": "5.0.1"
+    "toml": "5.0.1",
+    "effect": "3.22.5",
+    "minimatch": "^11.0.1",
+    "glob": "^14.0.2"
   },
   "jest": {
     "moduleFileExtensions": [

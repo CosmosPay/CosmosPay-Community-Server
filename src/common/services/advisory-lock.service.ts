@@ -111,4 +111,12 @@ export enum AdvisoryLockKey {
   ProtectedPaymentSync = 881_016,
   ProtectedPaymentExpiry = 881_017,
   ProtectedPaymentDeadline = 881_018,
+  // Payment requests paid by bank transfer (native plugin `koywe`).
+  BankTransferSweep = 881_019,
+  // Direct P2P orders marked paid and never settled (native plugin `eldorado`).
+  P2pDirectProcessingSweep = 881_020,
+  PaymentDepositObserver = 881_021,
+  // 881_022 is the deposit slots' two-key class (`PAYMENT_DEPOSIT_LOCK_CLASS`).
+  PaymentReceiptSweeper = 881_023,
+  SandboxDepositObserver = 881_024,
 }

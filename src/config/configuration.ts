@@ -4,6 +4,7 @@ import {
   DEFAULT_DEFINDEX_MAX_FEE_STROOPS,
   DEFAULT_DEFINDEX_TIMEOUT_MS,
   DEFAULT_ELDORADO_TIMEOUT_MS,
+  DEFAULT_ELDORADO_WEBHOOK_JWKS_URL,
   DEFAULT_ENV_FILE,
   DEFAULT_CHAIN_RPC_TIMEOUT_MS,
   DEFAULT_CROSS_CHAIN_DEADLINE_SECONDS,
@@ -11,11 +12,19 @@ import {
   DEFAULT_CROSS_CHAIN_SLIPPAGE_BPS,
   DEFAULT_HORIZON,
   DEFAULT_JUPITER_BASE_URL,
+  DEFAULT_KOYWE_API_URL,
+  DEFAULT_KOYWE_MAX_ARS,
+  DEFAULT_KOYWE_MIN_ARS,
+  DEFAULT_KOYWE_SANDBOX_NETWORK,
+  DEFAULT_KOYWE_SANDBOX_TOKEN,
   DEFAULT_KURU_BASE_URL,
+  DEFAULT_ARC_LOG_BLOCK_RANGE,
+  DEFAULT_ARC_RPC,
   DEFAULT_MONAD_LOG_BLOCK_RANGE,
   DEFAULT_MONAD_RPC,
   DEFAULT_NEAR_INTENTS_BASE_URL,
   DEFAULT_NEAR_INTENTS_TIMEOUT_MS,
+  DEFAULT_SANDBOX_RPC_TIMEOUT_MS,
   DEFAULT_PAYMENT_LINK_CHECKOUT_URL,
   DEFAULT_RATE_LIMIT_PRUNE_INTERVAL_MS,
   DEFAULT_RECOVERY_SWEEP_INTERVAL_MS,
@@ -51,6 +60,12 @@ import {
   type RedirectUrlWhitelist,
 } from '@/config/kyc-redirect-url-whitelist';
 import { type EvmTokenFees, parseEvmTokenFees } from '@/config/evm-token-fees';
+import {
+  isEvmAddressValue,
+  isRpcUrl,
+  parseNetworkMap,
+} from '@/config/sandbox-env';
+import type { PaymentNetwork } from '@/payment-intents/payment-networks';
 import {
   isNativePluginSlug,
   type NativePluginSlug,
@@ -117,6 +132,24 @@ export interface TrustlessWorkNetworkConfig {
   contractWasmHash: string;
 }
 
+/**
+ * One environment of the bank transfer provider (native plugin `koywe`):
+ * production (`KOYWE_*`) for the `public` network, the sandbox
+ * (`KOYWE_SANDBOX_*`) for `testnet`. Every value is the operator's; an
+ * environment missing the key, the secret, the organization or the webhook
+ * secret serves no bank transfer (`isKoyweEnvironmentComplete`). `merchantId`
+ * is Cosmos Pay's own merchant, used only in pooled mode.
+ */
+export interface KoyweEnvironmentConfig {
+  apiUrl: string;
+  apiKey: string;
+  secret: string;
+  organizationId: string;
+  merchantId: string;
+  /** The secret the webhook endpoint was registered with: deliveries are HMAC-SHA256 of the raw body under it. */
+  webhookSecret: string;
+}
+
 /** The API-key environment a BlindPay instance serves (`dev` keys, `prod` keys). */
 export type BlindpayEnvironment = 'dev' | 'prod';
 
@@ -152,6 +185,27 @@ export interface BlindpayInstanceConfig {
   instanceId: string;
   // Svix endpoint secret (whsec_...) used to verify this instance's webhooks.
   webhookSecret: string;
+}
+
+/**
+ * What every EVM chain this service settles on is configured with (`<CHAIN>_*`
+ * variables): one node per tier, the log scan's block range, and the relayer
+ * that turns deposit addresses on.
+ */
+export interface EvmChainSettings {
+  rpcUrls: Record<StellarNetwork, string>;
+  timeoutMs: number;
+  /** Blocks one `eth_getLogs` call may span; the RPC provider's limit. */
+  logBlockRange: number;
+  /**
+   * The relayer's secret key (hex). Set, every PAY intent on the chain gets
+   * its own CREATE2 deposit address and the relayer forwards what arrives;
+   * empty, intents pay the merchant directly and are matched by amount. It
+   * holds gas money only (see `contracts/PaymentForwarder.sol`).
+   */
+  relayerPrivateKey: string;
+  /** Per-token relayer fees for token deposits (`<CHAIN>_DEPOSIT_TOKEN_FEES`). */
+  depositTokenFees: EvmTokenFees;
 }
 
 export interface AppConfig {
@@ -313,26 +367,19 @@ export interface AppConfig {
    * Monad (EVM), per network tier: `public` is mainnet, `testnet` is Monad's
    * testnet. The chain ids are not configurable — see `MONAD_CHAIN_IDS`.
    */
-  monad: {
-    rpcUrls: Record<StellarNetwork, string>;
-    timeoutMs: number;
-    /** Blocks one `eth_getLogs` call may span; the RPC provider's limit. */
-    logBlockRange: number;
-    /**
-     * The relayer's secret key (hex). Set, every Monad PAY intent gets its own
-     * CREATE2 deposit address and the relayer forwards what arrives; empty,
-     * Monad intents pay the merchant directly and are matched by amount. It
-     * holds gas money only — see `contracts/PaymentForwarder.sol`.
-     */
-    relayerPrivateKey: string;
-    /** Per-token relayer fees for token deposits (`MONAD_DEPOSIT_TOKEN_FEES`). */
-    depositTokenFees: EvmTokenFees;
+  monad: EvmChainSettings & {
     /**
      * The address the Monad swap commission is paid to (Kuru Flow's
      * `referrerAddress`). Empty disables it; a plan that charges one refuses.
      */
     swapFeeWallet: string;
   };
+  /**
+   * Arc (EVM, USDC as its gas coin), per network tier: `public` is mainnet,
+   * `testnet` is Arc Testnet. The chain ids are not configurable: see
+   * `ARC_CHAIN_IDS`. No swap venue, so no swap fee wallet.
+   */
+  arc: EvmChainSettings;
   /**
    * The aggregators that build same-chain swaps off Stellar: Jupiter on
    * Solana, Kuru Flow on Monad. Mainnet only, both of them.
@@ -377,6 +424,22 @@ export interface AppConfig {
      * figures, the asset list) does not wait for 1Click. Off in the e2e suites.
      */
     prefetchTokens: boolean;
+  };
+  /**
+   * Sandbox settlement: payment links on the networks paid through deposit
+   * addresses, on their TEST networks (`src/sandbox-settlement/`). Off (every
+   * such network unavailable in the sandbox) until both secrets are set.
+   */
+  sandbox: {
+    /** BIP-32 seed (hex) every sandbox deposit address is derived from. */
+    depositSeed: string;
+    /** The treasury's secp256k1 key (0x + 64 hex): pays merchants on test networks. */
+    treasuryPrivateKey: string;
+    /** RPC overrides per network (`SANDBOX_RPC_URLS`); the rest use the defaults. */
+    rpcUrls: Partial<Record<PaymentNetwork, string>>;
+    /** Where cUSD is deployed, per network (`SANDBOX_CUSD_ADDRESSES`). */
+    cusdAddresses: Partial<Record<PaymentNetwork, string>>;
+    timeoutMs: number;
   };
   /** The dashboard's analytics reads. */
   analytics: {
@@ -472,12 +535,47 @@ export interface AppConfig {
    * set, replaces `referralId` for the shared public key's quotes and orders:
    * the marketplace sets the integrator's commission per referral id, so the
    * one the public key carries is where anonymous use is priced.
+   * `webhookJwksUrls` is where each network's marketplace publishes the keys
+   * its order webhooks are signed with (`POST /v1/onramp/p2p/webhooks`).
+   * `apiReferralId` (a referral id whose source type is API, not WIDGET) and
+   * `directSessionSecret` switch on the direct flow: an ARS payment request
+   * paid from the payer's page through the marketplace's API, without its
+   * window (`/v1/payment-links/fiat/{id}/direct/*`). The secret seals the
+   * payer's marketplace session (`X-Payer-Session`); without both, with
+   * `clientId`, the flow is off.
    */
   eldorado: {
     clientId: string;
     referralId: string;
     publicReferralId: string;
+    apiReferralId: string;
+    directSessionSecret: string;
     timeoutMs: number;
+    webhookJwksUrls: Record<StellarNetwork, string>;
+  };
+  /**
+   * The `koywe` native plugin: payment requests paid by bank transfer in ARS,
+   * converted to the request's token and delivered to the seller. Every value
+   * is optional; the rail is off for a network whose environment is incomplete,
+   * and for both without `documentPepper` (the payer's document is stored only
+   * as an HMAC under it). Each seller is paid into a provider merchant of their
+   * own; `pooledEnabled` lets Cosmos Pay's merchant (`merchantId`) take the
+   * requests of sellers without one. `accountHolder`, `alias` and `cvu` describe
+   * that pooled account (`alias` / `cvu` replace what its ARS virtual account
+   * reports); `sandboxNetwork` / `sandboxToken` are where the sandbox converts
+   * every test request.
+   */
+  koywe: {
+    environments: Record<StellarNetwork, KoyweEnvironmentConfig>;
+    pooledEnabled: boolean;
+    documentPepper: string;
+    accountHolder: string;
+    alias: string;
+    cvu: string;
+    minArs: number;
+    maxArs: number;
+    sandboxNetwork: string;
+    sandboxToken: string;
   };
   /** The `trustless-work` native plugin: protected payments on Trustless Work V1. */
   trustlessWork: {
@@ -807,6 +905,28 @@ function trustlessWorkNetwork(
   };
 }
 
+/**
+ * One environment of the bank transfer provider: `KOYWE_<name>` for
+ * production (`public`), `KOYWE_SANDBOX_<name>` for the sandbox (`testnet`).
+ * Relations between the values are checked when the plugin boots
+ * (`assertKoyweConfigConsistent`), not here.
+ */
+function koyweEnvironment(network: StellarNetwork): KoyweEnvironmentConfig {
+  const prefix = network === 'public' ? 'KOYWE_' : 'KOYWE_SANDBOX_';
+  const env = (name: string) => process.env[`${prefix}${name}`]?.trim() ?? '';
+  return {
+    apiUrl: (env('API_URL') || DEFAULT_KOYWE_API_URL[network]).replace(
+      /\/+$/,
+      '',
+    ),
+    apiKey: env('API_KEY'),
+    secret: env('SECRET'),
+    organizationId: env('ORGANIZATION_ID'),
+    merchantId: env('MERCHANT_ID'),
+    webhookSecret: env('WEBHOOK_SECRET'),
+  };
+}
+
 function zkNetwork(network: StellarNetwork): ZkNetworkConfig | null {
   const env = (field: Parameters<typeof zkPaymentsEnvName>[1]) =>
     process.env[zkPaymentsEnvName(network, field)]?.trim() ?? '';
@@ -972,6 +1092,25 @@ export default (): AppConfig => ({
     depositTokenFees: parseEvmTokenFees(process.env.MONAD_DEPOSIT_TOKEN_FEES),
     swapFeeWallet: process.env.MONAD_SWAP_FEE_WALLET?.trim() ?? '',
   },
+  arc: {
+    rpcUrls: {
+      public: process.env.ARC_RPC_URL_MAINNET ?? DEFAULT_ARC_RPC.public,
+      testnet: process.env.ARC_RPC_URL_TESTNET ?? DEFAULT_ARC_RPC.testnet,
+    },
+    timeoutMs: parseInt(
+      process.env.ARC_RPC_TIMEOUT_MS ?? String(DEFAULT_CHAIN_RPC_TIMEOUT_MS),
+      10,
+    ),
+    logBlockRange: parseInt(
+      process.env.ARC_LOG_BLOCK_RANGE ?? String(DEFAULT_ARC_LOG_BLOCK_RANGE),
+      10,
+    ),
+    relayerPrivateKey: process.env.ARC_RELAYER_PRIVATE_KEY?.trim() ?? '',
+    depositTokenFees: parseEvmTokenFees(
+      process.env.ARC_DEPOSIT_TOKEN_FEES,
+      'ARC_DEPOSIT_TOKEN_FEES',
+    ),
+  },
   swapAggregators: {
     jupiter: {
       baseUrl: (
@@ -1027,6 +1166,25 @@ export default (): AppConfig => ({
     prefetchTokens:
       (process.env.NEAR_INTENTS_TOKENS_PREFETCH ?? 'true').toLowerCase() !==
       'false',
+  },
+  sandbox: {
+    depositSeed: process.env.SANDBOX_DEPOSIT_SEED?.trim() ?? '',
+    treasuryPrivateKey: process.env.SANDBOX_TREASURY_PRIVATE_KEY?.trim() ?? '',
+    rpcUrls: parseNetworkMap(
+      process.env.SANDBOX_RPC_URLS,
+      'SANDBOX_RPC_URLS',
+      isRpcUrl,
+    ),
+    cusdAddresses: parseNetworkMap(
+      process.env.SANDBOX_CUSD_ADDRESSES,
+      'SANDBOX_CUSD_ADDRESSES',
+      isEvmAddressValue,
+    ),
+    timeoutMs: parseInt(
+      process.env.SANDBOX_RPC_TIMEOUT_MS ??
+        String(DEFAULT_SANDBOX_RPC_TIMEOUT_MS),
+      10,
+    ),
   },
   analytics: {
     cacheTtlMs: parseInt(
@@ -1177,10 +1335,45 @@ export default (): AppConfig => ({
     clientId: process.env.ELDORADO_CLIENT_ID?.trim() ?? '',
     referralId: process.env.ELDORADO_REFERRAL_ID?.trim() ?? '',
     publicReferralId: process.env.ELDORADO_PUBLIC_REFERRAL_ID?.trim() ?? '',
+    apiReferralId: process.env.ELDORADO_API_REFERRAL_ID?.trim() ?? '',
+    directSessionSecret: process.env.P2P_DIRECT_SESSION_SECRET?.trim() ?? '',
     timeoutMs: parseInt(
       process.env.ELDORADO_TIMEOUT_MS ?? String(DEFAULT_ELDORADO_TIMEOUT_MS),
       10,
     ),
+    webhookJwksUrls: {
+      public:
+        process.env.ELDORADO_WEBHOOK_JWKS_URL_MAINNET?.trim() ||
+        DEFAULT_ELDORADO_WEBHOOK_JWKS_URL.public,
+      testnet:
+        process.env.ELDORADO_WEBHOOK_JWKS_URL_TESTNET?.trim() ||
+        DEFAULT_ELDORADO_WEBHOOK_JWKS_URL.testnet,
+    },
+  },
+  koywe: {
+    environments: {
+      public: koyweEnvironment('public'),
+      testnet: koyweEnvironment('testnet'),
+    },
+    pooledEnabled:
+      (process.env.KOYWE_POOLED_ENABLED ?? 'false').trim().toLowerCase() ===
+      'true',
+    documentPepper: process.env.KOYWE_DOCUMENT_PEPPER?.trim() ?? '',
+    accountHolder: process.env.KOYWE_ACCOUNT_HOLDER?.trim() ?? '',
+    alias: process.env.KOYWE_ALIAS?.trim() ?? '',
+    cvu: process.env.KOYWE_CVU?.trim() ?? '',
+    minArs: parseFloat(
+      process.env.KOYWE_MIN_ARS?.trim() || String(DEFAULT_KOYWE_MIN_ARS),
+    ),
+    maxArs: parseFloat(
+      process.env.KOYWE_MAX_ARS?.trim() || String(DEFAULT_KOYWE_MAX_ARS),
+    ),
+    sandboxNetwork: (
+      process.env.KOYWE_SANDBOX_NETWORK?.trim() || DEFAULT_KOYWE_SANDBOX_NETWORK
+    ).toUpperCase(),
+    sandboxToken: (
+      process.env.KOYWE_SANDBOX_TOKEN?.trim() || DEFAULT_KOYWE_SANDBOX_TOKEN
+    ).toUpperCase(),
   },
   trustlessWork: {
     networks: {

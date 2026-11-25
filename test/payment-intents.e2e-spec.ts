@@ -68,6 +68,8 @@ describe('Payment intents CRUD (e2e)', () => {
     },
     // The webhook dispatcher reacts to emitted events; no endpoints registered here.
     webhookEndpoint: { findMany: jest.fn().mockResolvedValue([]) },
+    // The deposit addresses of an intent (payments from any network).
+    paymentDeposit: { findMany: jest.fn().mockResolvedValue([]) },
     // Terminal payment-intent events now go through WebhookTerminalEmitter,
     // which claims a dedup row and writes the delivery rows in one
     // transaction before touching the bus. With no endpoints registered the
@@ -474,6 +476,128 @@ describe('Payment intents CRUD (e2e)', () => {
     await asAccount(
       request(http()).delete(`${route}/${id}`).set('x-consumer-env', 'prod'),
     ).expect(200);
+  });
+
+  describe('GET /v1/payment-intents/{id}/payer-emails', () => {
+    it('refuses a caller without the gateway secret (403)', () =>
+      request(http()).get(`${route}/${createdId}/payer-emails`).expect(403));
+
+    it("answers another consumer's intent as not found (404)", () =>
+      gwAs('cosmos_someone_else')(
+        request(http()).get(`${route}/${createdId}/payer-emails`),
+      ).expect(404));
+  });
+
+  describe('GET /v1/payment-intents/{id}/route-check', () => {
+    it('refuses a caller without the gateway secret (403)', () =>
+      request(http()).get(`${route}/${createdId}/route-check`).expect(403));
+
+    it("answers another consumer's intent as not found (404)", () =>
+      gwAs('cosmos_someone_else')(
+        request(http()).get(`${route}/${createdId}/route-check`),
+      ).expect(404));
+  });
+
+  describe("an intent's deposit addresses (GET /v1/payment-intents/{id}/deposits)", () => {
+    it('refuses a caller without the gateway secret (403)', () =>
+      request(http()).get(`${route}/${createdId}/deposits`).expect(403));
+
+    it("answers another consumer's intent as not found (404), reading no deposit", async () => {
+      prismaMock.paymentDeposit.findMany.mockClear();
+      await gwAs('cosmos_someone_else')(
+        request(http()).get(`${route}/${createdId}/deposits`),
+      ).expect(404);
+      expect(prismaMock.paymentDeposit.findMany).not.toHaveBeenCalled();
+    });
+
+    it("lists the owner's, newest first (200)", async () => {
+      const res = await gw(
+        request(http()).get(`${route}/${createdId}/deposits`),
+      ).expect(200);
+      expect(res.body).toEqual({ data: [] });
+      expect(prismaMock.paymentDeposit.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { intentId: createdId },
+          orderBy: { createdAt: 'desc' },
+        }),
+      );
+    });
+  });
+
+  describe('the networks a link can settle on (GET /v1/payment-intents/networks)', () => {
+    const networks = `${route}/networks`;
+
+    it('refuses a caller without the gateway secret (403)', () =>
+      request(http()).get(networks).expect(403));
+
+    it('answers a dev key with what the sandbox settles, in its test stablecoin', async () => {
+      const res = await gw(request(http()).get(networks)).expect(200);
+      const byId = Object.fromEntries(
+        res.body.data.map((n: { id: string }) => [n.id, n]),
+      );
+      expect(res.body.data).toHaveLength(36);
+      expect(byId.stellar).toMatchObject({
+        network: 'testnet',
+        available: true,
+        settlesThroughDeposits: false,
+      });
+      // Arc links exist only with deposit addresses, and this deployment
+      // issues none (no ARC_RELAYER_PRIVATE_KEY): the create refuses them, so
+      // the catalog says so.
+      expect(byId.arc).toMatchObject({
+        name: 'Arc',
+        network: 'testnet',
+        available: false,
+        settlesThroughDeposits: false,
+        asset: null,
+      });
+      expect(byId.arc.reason).toMatch(/not available on this deployment/);
+      expect(byId.base).toMatchObject({
+        network: 'testnet',
+        available: true,
+        settlesThroughDeposits: true,
+        asset: {
+          symbol: 'USDC',
+          contract: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+          decimals: 6,
+        },
+      });
+      expect(byId.bsc).toMatchObject({ available: false, asset: null });
+      expect(byId.bsc.reason).toMatch(/cUSD/);
+      expect(byId.btc).toMatchObject({ available: false, asset: null });
+      // The reasons are read by people: they never name a provider.
+      const reasons = res.body.data.map(
+        (n: { reason: string | null }) => n.reason,
+      );
+      expect(reasons.join(' ')).not.toMatch(
+        /near intents|1click|circle|defuse/i,
+      );
+    });
+
+    it('answers a production key with every network, in any asset, but Arc without deposit addresses', async () => {
+      const res = await gw(
+        request(http()).get(networks).set('x-consumer-env', 'prod'),
+      ).expect(200);
+      type Row = {
+        id: string;
+        available: boolean;
+        reason: string | null;
+        network: string;
+        asset: unknown;
+      };
+      const rows: Row[] = res.body.data;
+      expect(
+        rows.every((n) => n.network === 'public' && n.asset === null),
+      ).toBe(true);
+      // No ARC_RELAYER_PRIVATE_KEY here: Arc is the one network a link
+      // cannot be created on, and the catalog says why.
+      expect(rows.filter((n) => !n.available).map((n) => n.id)).toEqual([
+        'arc',
+      ]);
+      expect(rows.find((n) => n.id === 'arc')?.reason).toMatch(
+        /not available on this deployment/,
+      );
+    });
   });
 
   it('gets one by id (200)', async () => {

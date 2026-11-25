@@ -569,6 +569,126 @@ describe('P2pRampService', () => {
     });
   });
 
+  it('answers the marketplace’s status as `status`, and the payment request a session came from', async () => {
+    const { service, prisma } = setup();
+    prisma.p2pRampSession.findMany.mockResolvedValueOnce([
+      { id: 'clz_s1', providerStatus: 'FIAT_PAID', paymentRequestId: 'creq1' },
+      { id: 'clz_s2', providerStatus: null, paymentRequestId: null },
+    ]);
+
+    const listed = await service.findAll(key('prod'), 'buy', {
+      take: 100,
+      skip: 0,
+    });
+
+    expect(listed.data).toEqual([
+      { id: 'clz_s1', status: 'FIAT_PAID', paymentRequestId: 'creq1' },
+      { id: 'clz_s2', status: null, paymentRequestId: null },
+    ]);
+    // The raw column never leaves under its own name.
+    expect(listed.data[0]).not.toHaveProperty('providerStatus');
+  });
+
+  describe('for payment requests', () => {
+    const TERMS = {
+      currency: 'ARS',
+      chainId: 42161,
+      token: USDT0,
+      amount: '15000.5',
+      address: ADDRESS_LOWER,
+    };
+
+    it('checks a request’s terms like a purchase, with no payment method yet', async () => {
+      const { service } = setup();
+
+      await expect(
+        service.checkOrderOn('public', TERMS, 'buy'),
+      ).resolves.toMatchObject({
+        currency: { id: 'ARS', price: '1600' },
+        token: { address: USDT0, symbol: 'USDT0', decimals: 6 },
+      });
+      await expect(
+        service.checkOrderOn(
+          'public',
+          { ...TERMS, amount: '15000.505' },
+          'buy',
+        ),
+      ).rejects.toMatchObject({
+        code: ApiErrorCode.ValidationFailed,
+        message: 'amount is local money: at most two decimals',
+      });
+      await expect(
+        service.checkOrderOn('public', { ...TERMS, amount: '7999.99' }, 'buy'),
+      ).rejects.toMatchObject({
+        message: 'amount is below the minimum of 8000 ARS',
+      });
+      await expect(
+        service.checkOrderOn('public', { ...TERMS, currency: 'BRL' }, 'buy'),
+      ).rejects.toMatchObject({
+        message: 'currency BRL cannot be bought (offered: ARS)',
+      });
+      // A method named is still checked.
+      await expect(
+        service.checkOrderOn(
+          'public',
+          { ...TERMS, paymentMethod: 'pix' },
+          'buy',
+        ),
+      ).rejects.toMatchObject({
+        message: 'paymentMethod pix does not pay in ARS (offered: bank_tx_ar)',
+      });
+    });
+
+    it('records a session for an owner it is handed, with the owner’s referral id, linked to the request', async () => {
+      const { service, prisma, client, consumers } = setup({
+        clientId: 'c-1',
+        referralId: 'r-public',
+      });
+      const order = { ...TERMS, paymentMethod: 'bank_tx_ar' };
+      const checked = await service.checkOrderOn('public', order, 'buy');
+
+      const session = await service.recordSession(
+        { consumerId: 'c_seller', sharedPublicKey: true },
+        'public',
+        'buy',
+        order,
+        checked,
+        'creq1',
+      );
+
+      const data = prisma.p2pRampSession.create.mock.calls[0][0].data;
+      expect(data).toMatchObject({
+        consumerId: 'c_seller',
+        network: 'public',
+        side: 'buy',
+        amount: '15000.5',
+        address: ADDRESS,
+        paymentRequestId: 'creq1',
+      });
+      expect(client.integratorIds).toHaveBeenLastCalledWith(true);
+      expect(new URL(session.widgetUrl).searchParams.get('address')).toBe(
+        ADDRESS,
+      );
+      expect(session.paymentRequestId).toBe('creq1');
+      // The owner is handed in, never resolved from a caller.
+      expect(consumers.resolve).not.toHaveBeenCalled();
+    });
+
+    it('reads the live buy terms of a request, null for what the market does not offer', async () => {
+      const { service } = setup();
+
+      const offered = await service.buyTerms('public', 'ARS', 42161, USDT0);
+      expect(offered.currency?.paymentMethods).toEqual([
+        { id: 'bank_tx_ar', name: 'Bank Transfer (ARS)' },
+      ]);
+      expect(offered.token?.symbol).toBe('USDT0');
+
+      await expect(
+        service.buyTerms('public', 'BRL', 81457, USDT0),
+      ).resolves.toEqual({ currency: null, token: null });
+    });
+  });
+
   describe('the shared public key', () => {
     it('quotes and opens a session with its own integrator ids, and gets the session token', async () => {
       const { service, client, recordTokens } = setup({
@@ -636,7 +756,11 @@ describe('P2pRampService', () => {
           session.id,
           session.publicToken,
         ),
-      ).resolves.toEqual({ id: session.id });
+      ).resolves.toEqual({
+        id: session.id,
+        status: null,
+        paymentRequestId: null,
+      });
       expect(prisma.p2pRampSession.findFirst.mock.calls[0][0].where).toEqual({
         id: session.id,
         consumerId: 'c_local',

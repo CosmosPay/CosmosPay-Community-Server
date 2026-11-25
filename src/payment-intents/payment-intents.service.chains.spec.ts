@@ -47,11 +47,13 @@ function build(stored: unknown[] = [null]) {
     get: () => ({ network: 'testnet', ttlSeconds: 3600, horizon: {} }),
   } as never;
   const chainLinks = {
-    normalize: jest.fn((chain: string, dto: { destination: string }) => ({
-      destination: chain === 'monad' ? EVM_DEST : dto.destination,
-      asset: 'native',
-      assetIssuer: null,
-    })),
+    normalize: jest.fn(
+      (chain: string, _network: string, dto: { destination: string }) => ({
+        destination: chain === 'monad' ? EVM_DEST : dto.destination,
+        asset: 'native',
+        assetIssuer: null,
+      }),
+    ),
     build: jest.fn().mockResolvedValue(LINK),
   };
   const verifier = { verifyByHash: jest.fn() };
@@ -64,6 +66,7 @@ function build(stored: unknown[] = [null]) {
     new ConsumerResolverService(prisma),
     { ensureForPayer: jest.fn() } as never,
     chainLinks as never,
+    {} as never,
   );
   return { service, prisma, chainLinks, verifier };
 }

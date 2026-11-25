@@ -64,6 +64,9 @@ src/
   cross-chain-swaps/              swaps across 35 networks via NEAR Intents (Stellar, Solana, Monad, EVM,
                                   UTXO, ...): network registry, quote, deposit address + wallet link, observer
   near-intents/                   NEAR Intents 1Click client: tokens, quote, status, deposit submit
+  sandbox-settlement/             payment links on the test networks: one ledger per kind of network (EVM, XRP
+                                  Ledger, NEAR, Sui, Aptos), deposit target per payment, payouts and refunds from
+                                  a treasury, cUSD and treasury-setup script support
   usdt0/                          USDT0 from Stellar to EVM networks through LayerZero's OFT: routes, quote,
                                   build + relay the Soroban `send`, status from the ledger and LayerZero Scan
   zk-payments/                    private payments: confidential transfers on Cosmos Pay's token, verified on-chain;
@@ -84,11 +87,15 @@ src/
   activity/                       client telemetry ingest + feed (wallet, dashboard)
   admin/                          cross-tenant platform admin (console-only), audited
   audit/                          audit-trail writer, called inside other modules' transactions
+  payment-request-rails/          扩展点：拥有付款请求的插件（其账本）与以其他方式支付它们的插件
+                                  （一条通道，例如 `transfer`）之间的接口
   plugins/                        plugin runtime + SDK (sdk.ts): folder loader, signatures, V8-isolate sandbox
   native-plugins/                 first-party plugins, imported only when PLUGINS_ENABLED names them:
     blindpay/                     BlindPay: client, Svix verify, sync + webhook, kyc/, onramp/, offramp/, admin/
     defindex/                     DeFindex vaults (Stellar)
     eldorado/                     P2P 入金与出金：在 El Dorado 上用本地货币买卖稳定币（Arbitrum）
+    koywe/                        二维码收款的 ARS 银行转账：卖家账户（托管 KYB）、存款说明、
+                                  合作方的签名 webhook、兑换为代币、清扫任务
     trustless-work/               protected payments on Trustless Work (Stellar): client, envelope checks,
                                   sync / expiry / deadline jobs, the keyless buyer routes, admin/
   health/                         liveness/readiness probes (@Public)
@@ -126,7 +133,7 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | 领域 | 基础路径 | 功能 |
 | ----------------- | ------------------------ | -------------------------------------------------------- |
 | 支付意图          | `/v1/payment-intents`    | Stellar（SEP-7）、Solana（Solana Pay）和 Monad（EIP-681）上的 `pay` 意图、SEP-7 `tx`、校验、链上观察器 |
-| 支付链接          | `/v1/payment-links`      | 付款方所见的单个支付意图，供托管收银页使用——无需 API key（`@Public`） |
+| 支付链接          | `/v1/payment-links`      | 付款方所见的单个支付意图，供托管收银页使用，以及一笔以本地货币计的 P2P 收款（`/fiat/{id}`）——无需 API key（`@Public`） |
 | Swap | `/v1/swaps` | 路径支付报价、构建未签名 XDR、提交已签名交易 · Solana 经由 Jupiter，Monad 经由 Kuru Flow |
 | 跨链 swap | `/v1/cross-chain-swaps` | 通过 NEAR Intents 在 35 个网络之间（Stellar、Solana、Monad、EVM 链、Bitcoin 与 UTXO 币等）：报价、充值地址、状态 |
 | USDT0 | `/v1/usdt0` | 通过 LayerZero 把 USDT0 从 Stellar 发送到 21 个 EVM 网络（在 Ethereum 上到账为原生 USDT），仅限主网：报价、构建、提交、状态 |
@@ -136,7 +143,7 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | Webhooks | `/v1/webhooks` | 端点 CRUD、密钥轮换、投递记录、重新投递 |
 | KYC | `/v1/kyc` | Receiver（KYC/KYB）、钱包、银行账户、文档上传 |
 | Onramp | `/v1/onramp` | Payin 报价、payin、虚拟账户 |
-| P2P 入金 | `/v1/onramp/p2p` | 通过 P2P 卖家用本地货币换取市场所列各链上的任意代币：市场、代币、确定报价、购买会话 |
+| P2P 入金 | `/v1/onramp/p2p` | 通过 P2P 卖家用本地货币换取市场所列各链上的任意代币：市场、代币、确定报价、购买会话、二维码收款（收款请求） |
 | Offramp | `/v1/offramp` | Payout 报价、授权、payout（客户端签名） |
 | P2P 出金 | `/v1/offramp/p2p` | 通过 P2P 买家把任意所列代币换成本地货币：市场、代币、确定报价、出售会话 |
 | 商品 | `/v1/products` | 商户商品目录 |
@@ -260,11 +267,19 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | POST | `/v1/offramp/payouts/{id}/documents` | `offramp:write` |  |
 | POST | `/v1/offramp/quotes` | `offramp:write` |  |
 | GET | `/v1/onramp/p2p/market` | `onramp:read` | ✓ |
+| GET | `/v1/onramp/p2p/payment-requests` | `onramp:read` |  |
+| POST | `/v1/onramp/p2p/payment-requests` | `onramp:write` | ✓ |
+| GET | `/v1/onramp/p2p/payment-requests/{id}` | `onramp:read` | ✓ |
+| POST | `/v1/onramp/p2p/payment-requests/{id}/cancel` | `onramp:write` | ✓ |
 | POST | `/v1/onramp/p2p/quotes` | `onramp:write` | ✓ |
 | GET | `/v1/onramp/p2p/sessions` | `onramp:read` |  |
 | POST | `/v1/onramp/p2p/sessions` | `onramp:write` | ✓ |
 | GET | `/v1/onramp/p2p/sessions/{id}` | `onramp:read` | ✓ |
 | GET | `/v1/onramp/p2p/tokens` | `onramp:read` | ✓ |
+| POST | `/v1/onramp/p2p/webhooks` | 无：`@Public()`，由 P2P 市场签名；不在 OpenAPI 契约中 |  |
+| GET | `/v1/onramp/transfer/account` | `onramp:read` | ✓ |
+| POST | `/v1/onramp/transfer/account` | `onramp:write` | ✓ |
+| POST | `/v1/onramp/transfer/webhooks` | 无：`@Public()`，由银行转账合作方签名；不在 OpenAPI 契约中 |  |
 | GET | `/v1/onramp/payins` | `onramp:read` |  |
 | POST | `/v1/onramp/payins` | `onramp:write` |  |
 | GET | `/v1/onramp/payins/{id}` | `onramp:read` |  |
@@ -273,11 +288,15 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | POST | `/v1/onramp/receivers/{receiverId}/virtual-accounts` | `onramp:write` |  |
 | POST | `/v1/onramp/trustline` | `onramp:write` |  |
 | GET | `/v1/payment-intents` | `payments:read` |  |
+| GET | `/v1/payment-intents/networks` | `payments:read` | ✓ |
 | POST | `/v1/payment-intents/pay` | `payments:write` | ✓ |
 | POST | `/v1/payment-intents/tx` | `payments:write` | ✓ |
 | GET | `/v1/payment-intents/{id}` | `payments:read` |  |
 | PATCH | `/v1/payment-intents/{id}` | `payments:write` |  |
 | DELETE | `/v1/payment-intents/{id}` | `payments:write` |  |
+| GET | `/v1/payment-intents/{id}/deposits` | `payments:read` |  |
+| GET | `/v1/payment-intents/{id}/payer-emails` | `payments:read` |  |
+| GET | `/v1/payment-intents/{id}/route-check` | `payments:read` |  |
 | GET | `/v1/payment-intents/{id}/transitions` | `payments:read` |  |
 | POST | `/v1/payment-intents/{id}/validate` | `payments:write` |  |
 | GET | `/v1/payment-links/{id}` | 无 — `@Public()`，按客户端地址计预算 |  |
@@ -285,6 +304,24 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | POST | `/v1/payment-links/{id}/events` | 无：`@Public()`，按客户端地址计预算 |  |
 | GET | `/v1/payment-links/{id}/solana-pay` | 无：`@Public()`，按客户端地址计预算 |  |
 | POST | `/v1/payment-links/{id}/solana-pay` | 无：`@Public()`，按客户端地址计预算 |  |
+| GET | `/v1/payment-links/{id}/deposit-assets` | 无：`@Public()`，按客户端地址计预算 |  |
+| POST | `/v1/payment-links/{id}/quote` | 无：`@Public()`，按客户端地址计预算 |  |
+| POST | `/v1/payment-links/{id}/deposits` | 无：`@Public()`，按客户端地址计预算 |  |
+| GET | `/v1/payment-links/{id}/deposits/{depositId}` | 无：`@Public()`，按客户端地址计预算 |  |
+| POST | `/v1/payment-links/{id}/payer` | 无：`@Public()`，按客户端地址计预算 |  |
+| GET | `/v1/payment-links/fiat/{id}` | 无：`@Public()`，按客户端地址计预算 |  |
+| POST | `/v1/payment-links/fiat/{id}/sessions` | 无：`@Public()`，按客户端地址计预算 |  |
+| POST | `/v1/payment-links/fiat/{id}/direct/login` | 无：`@Public()`，按客户端地址计预算 |  |
+| POST | `/v1/payment-links/fiat/{id}/direct/login/verify` | 无：`@Public()`，按客户端地址计预算 |  |
+| GET | `/v1/payment-links/fiat/{id}/direct/kyc` | 无：`@Public()`，按客户端地址计预算 |  |
+| POST | `/v1/payment-links/fiat/{id}/direct/kyc/details` | 无：`@Public()`，按客户端地址计预算 |  |
+| POST | `/v1/payment-links/fiat/{id}/direct/kyc/phone` | 无：`@Public()`，按客户端地址计预算 |  |
+| GET | `/v1/payment-links/fiat/{id}/direct/accounts` | 无：`@Public()`，按客户端地址计预算 |  |
+| POST | `/v1/payment-links/fiat/{id}/direct/orders` | 无：`@Public()`，按客户端地址计预算 |  |
+| GET | `/v1/payment-links/fiat/{id}/direct/orders/{orderId}` | 无：`@Public()`，按客户端地址计预算 |  |
+| POST | `/v1/payment-links/fiat/{id}/direct/orders/{orderId}/paid` | 无：`@Public()`，按客户端地址计预算 |  |
+| POST | `/v1/payment-links/fiat/{id}/direct/orders/{orderId}/cancel` | 无：`@Public()`，按客户端地址计预算 |  |
+| POST | `/v1/payment-links/fiat/{id}/transfers` | 无：`@Public()`，按客户端地址计预算 |  |
 | GET | `/v1/plugins` | `plugins:read` |  |
 | GET | `/v1/plugins/{slug}` | `plugins:read` |  |
 | PUT | `/v1/plugins/{slug}/installation` | `plugins:write` |  |
@@ -440,6 +477,7 @@ platform 的 `COSMOS_API_URL`，用逗号分隔，然后在那里运行 `npm run
 有两条路径使用这同一条规则：
 
 - **手动：** `POST /v1/payment-intents/:id/validate`，请求体为 `{ "txHash": "<64-hex>" }`。匹配时，意图被置为 `SUCCEEDED`（并保存 `txHash`），同时触发 `PAYMENT_INTENT_SUCCEEDED` webhook。链上失败的交易**只有在它确实是该意图自己的支付时**——memo、目标地址和资产均相同——才会把意图标记为 `FAILED`。其他任何交易，无论失败与否，都属于不匹配，状态保持不变，以便仍可提交正确的交易。通过 `PATCH /v1/payment-intents/:id` 上报的 `txHash` 永远不会单凭自己结算一个意图：它必须是一个 64 字符的十六进制哈希，会以小写形式存储，并且只在发起调用的消费者自己的意图范围内保持唯一（与该消费者另一个意图冲突时返回 `409 idempotency_conflict`）。
+  在 Monad 和 Arc 上，失败的交易一律视为不匹配：它不带任何把它绑定到该意图的 memo 或 reference，因此永远不会把意图标记为 `FAILED`。
 - **自动（常驻观察器）：** `PaymentIntentObserverService` 每隔 `OBSERVER_INTERVAL_MS` 轮询一次 Horizon，查找 `PENDING` 状态的意图——按上报的 `txHash`，或扫描发往目标地址的支付——并以同样的方式终结匹配的意图，因此状态会变化、事件会触发，**无需任何人调用 API**。每个周期对每个消费者最多处理 `OBSERVER_MAX_INTENTS_PER_CONSUMER`（10）个意图，且从不扫描已过期的意图，因此单个消费者无法拖慢其他所有人的结算。本地开发时可用 `OBSERVER_ENABLED=false` 关闭。
 
 **过期检查会先查链。** 一个已超过生命周期的意图在被标记为 `EXPIRED` 之前会再验证一次：如果它的支付已经上链，就改为结算为 `SUCCEEDED`；如果无法连接 Horizon，就留给下一个周期处理。当该笔支付的哈希已经存在于同一个消费者的另一个意图上时，该意图会被置为过期，而不是无休止地重试。在过期*之后*才被验证的支付——无论是被观察器还是被 `validate`——仍会把一个 `EXPIRED` 的意图变为 `SUCCEEDED` 并触发 `PAYMENT_INTENT_SUCCEEDED`，因此请不要把 `EXPIRED` 当作最终状态。该扫描会回溯读取目标地址自意图创建以来的所有支付，最多 1,000 条（5 页，每页 200 条）；如果某个目标地址在一个意图的生命周期内收到的支付超过这个数量，请改用 `validate` 并携带哈希。
@@ -679,7 +717,7 @@ devnet 和 Monad testnet（10143）——所有链上的 `network` 都存为 `pu
   以这笔交易结算。手续费在创建意图时确定，并以 `networkFee` 显示：MON 为按当前价格计算的
   转发 gas 预算加 25%；代币为运营方在 `MONAD_DEPOSIT_TOKEN_FEES` 中的配置，未配置则为零
   （由 relayer 承担 gas）。会被手续费吞掉的金额返回 `400 invalid_amount`。意图过期或取消
-  后才到账的资金仍会转发给商户，付款方也可以用 `validate` 和自己的交易哈希提前结算。
+  后才到账的资金仍会转发给商户，付款方也可以用 `validate` 和自己的交易哈希提前结算。forwarder 部署后，之后到账的余额只有值得 relayer 付出的 gas 时才会被 flush：高于该充值自身的手续费，或对没有手续费的代币而言达到意图的完整金额（开放金额永不）；小额余额留在 forwarder 中，任何人都可以调用 `flush` / `flushToken`，且只会付给商户。
   relayer 密钥只存放 gas 资金：请适度充值并设置余额告警。字节码已提交
   （`src/evm/payment-forwarder.artifact.ts`），有一个 spec 会重新编译源码进行比对；所有
   充值地址都依赖它，只要旧地址仍可能收到资金，就绝不要修改它。
@@ -696,6 +734,17 @@ devnet 和 Monad testnet（10143）——所有链上的 `network` 都存为 `pu
 // response → { chain: "solana", uri: "solana:<base58>?amount=25.5&spl-token=…&reference=…&memo=…", chainReference, qr, … }
 ```
 
+### Arc 上的支付链接
+
+`chain: "arc"` 是 Arc，Circle 的 EVM 链，其 gas 以 USDC 支付，像 Monad 一样原生结算。`prod` 密钥访问 Arc 主网（chain id 5042），`dev` 密钥访问 Arc Testnet（5042002），`network` 存为 `public` / `testnet`。跨链路由不覆盖 Arc（它没有列出任何 Arc 代币），因此 Arc 链接只能在 Arc 上支付（`crossChainPayment` 始终为 false），Arc 也没有兑换路由：`/v1/swaps` 和 `/v1/cross-chain-swaps` 拒绝 `arc`（`400 validation_failed`）。其余一切与 Monad 相同：EIP-681 链接、观察器、带 `0x` + 64 位十六进制哈希的 `validate` / `PATCH`、配置 relayer 时的充值地址、通过充值地址收取的商户手续费、客户钱包、别名和钱包登录（EIP-191）、`GET /v1/payment-intents/networks`，以及浏览器链接（`https://explorer.arc.io`、`https://explorer.testnet.arc.io`）。
+
+- **USDC 通过其 ERC-20 接口收款。** Arc 的原生币是 USDC：作为原生币有 18 位小数，通过位于 `0x3600000000000000000000000000000000000000` 的 ERC-20 有 6 位，两者背后是同一个余额。Arc 链接从不直接收取原生币：省略资产、`native` 和 `USDC` 都会把该合约存为 `assetIssuer`，并带上 `asset: "USDC"` 和 `assetDecimals: 6`，因此金额最多 6 位小数，链接为 `ethereum:0x3600000000000000000000000000000000000000@5042/transfer?address=<payee>&uint256=<amount in 6 decimals>`。`EURC` 也是预设，每个层级各有自己的合约。其他任何 ERC-20 都通过 `assetIssuer` 指定，并像在 Monad 上一样在 Arc 上读取其 `decimals()`。
+- **两种付款方式都能结算，且任何付款都不会被计算两次。** 付款人的钱包可以把 USDC 作为 ERC-20 发送，也可以作为普通的价值转账发送：两者移动的是同一个余额。Arc 通过其系统发射器（`0xffff…fffe`，EIP-7708）以 18 位小数为每一笔 USDC 移动记录一次日志，ERC-20 转账还会由代币再以 6 位小数记录一次。验证器和观察器只读取发射器的日志，并截断为 6 位小数（低于一个 micro-USDC 的零头会被舍弃，与 `balanceOf` 相同），因此观察器也能找到价值转账，同一笔转账的两条日志永远不会被同时计算。EURC 和其他代币从其自身的 `Transfer` 日志读取。
+- **Arc 链接需要充值地址。** 没有 `ARC_RELAYER_PRIVATE_KEY` 时，Arc 上的链接会被拒绝（`400 network_unsupported`，在询问任何节点之前），`GET /v1/payment-intents/networks` 在两个层级都将 Arc 报告为 `available: false` 并附上原因。直接付款给商户的链接只能通过目标地址、资产和精确金额识别，因此一位客户的付款可能结算另一笔金额相同、更早的意图，其他账户也可以按某商户的地址和价格创建意图，按先到先得抢走其付款：Monad 保留这种模式，Arc 永远没有。配置该密钥后，每个 Arc 链接都有自己的充值地址（包括开放金额和商户手续费），由与 Monad 相同的 `contracts/PaymentForwarder.sol` 和 `PaymentSplitForwarder.sol` 转发。确定性部署代理已部署在 Arc 主网和测试网上，因此每个充值地址都是各自的 `CREATE2` 部署，无需事先部署任何合约。
+- **Relayer 的手续费以 USDC 计。** Arc 上的 gas 以 USDC 支付，因此 USDC 充值的 `networkFee` 按原生 MON 的方式定价：转发的 gas 预算（520k）乘以当前 gas 价格再加 25%，以 6 位小数表示（25 gwei 时为 0.01625 USDC），除非 `ARC_DEPOSIT_TOKEN_FEES` 为其指定了手续费。EURC 和其他代币只收取已配置的手续费。Relayer 的出价从不低于 Arc 的 20 gwei 下限（低于该下限的交易会被 Arc 静默丢弃，不返回任何错误），报价的手续费也从不低于该下限，无论节点的 `eth_gasPrice` 返回什么。
+- **打包即最终确认。** 交易在其区块中即为最终状态，因此一次确认即可结算；区块时间戳的精度为一秒，可能重复，观察器按区块号排序。
+- **运维。** 无需部署任何东西。要开启充值地址，请生成一个新密钥（绝不能是 Monad relayer 或沙盒金库的密钥：启动时两者都会被拒绝），设置 `ARC_RELAYER_PRIVATE_KEY`，并在它服务的每个层级向其地址转入 USDC：一次转发需要约 0.03 USDC 的可用余额（45 gwei 下的 gas 上限），实际花费约 0.012，因此 5 USDC 足够数百次转发。测试 USDC 可从 `https://faucet.circle.com` 获取。请对余额设置告警，而不是过量充值。没有该密钥时，Arc 链接会被拒绝，网络目录将 Arc 报告为不可用。公共 RPC 是默认值（`ARC_RPC_URL_MAINNET`、`ARC_RPC_URL_TESTNET`），每个节点在被信任前都会对照 Arc 的 chain id 进行校验。
+
 ### 支付链接：托管收银页背后的公开读取
 
 `GET /v1/payment-links/{id}` 按 id 向没有 API key、也没有网关密钥的调用方（`@Public()`）返回一个支付意图。位于 `https://payments.cosmospay.lat/<id>` 的收银页读取它，用来展示金额、资产和网络、付款地址、链接及其二维码，并轮询状态直到付款结算。响应（契约中的 `PublicPaymentLinkEntity`）有自己的结构，并不是去掉若干字段的所有者版 `GET /v1/payment-intents/{id}`：它逐字段构建（`toPublicPaymentLink`），因此之后加到 `payment_intent` 的列，在有人有意添加之前不会在这里公开。
@@ -709,6 +758,32 @@ devnet 和 Monad testnet（10143）——所有链上的 `network` 都存为 `pu
 - **id 难以猜测，但不是秘密。** id 是 Prisma 的 `cuid()`（v1）：毫秒时间戳、计数器、主机指纹，以及来自 `Math.random()` 的约 41 位随机数，而 `Math.random()` 并非密码学生成器。在这一预算下盲猜一个 id 不可行；但仍应把链接视为付款方与商户之间的私有信息，而不是访问凭证。
 - **部署：** 从 APISIX 的无 key 路由（不带 `key-auth`）提供 `/v1/payment-links/*`，与 `/v1/public-key` 一样，否则页面会收到 `401`。本服务在该路径上不发送任何 CORS 头，因此该路由的 CORS 插件必须允许来自收银页源站的 `GET`，并暴露 `Retry-After` 和 `ratelimit-*`；否则浏览器会丢弃每个响应。
 
+### 所有网络上的支付链接，可从任意网络付款
+
+`POST /v1/payment-intents/pay` 的 `chain` 取自跨链 swap 可达的网络列表（`PAYMENT_NETWORKS`，即 `CROSS_CHAIN_NETWORK_IDS`：35 个网络）。Stellar、Solana 和 Monad 保留各自的钱包链接和 observer。在其他任何网络上，链接就是托管 checkout，付款方从不直接向商户付款：checkout 询问付款方用哪个网络和资产付款，以及该网络上的退款地址，`POST /v1/payment-links/{id}/deposits` 返回跨链路由专为这一笔付款生成的充值地址（表 `payment_deposit`）。路由按链接资产向商户支付链接的准确金额（精确输出报价），`PaymentDepositObserverService` 根据路由的报告结算 intent，以付款交易作为 `txHash`，并在 `paidFrom` 中记录所发送的内容。没有新的链索引器：充值像跨链 swap 一样被跟踪。
+
+- **测试网上走沙盒。** 该路由没有测试网，因此 `dev` 密钥的链接在沙盒（下一节）覆盖的网络上由沙盒结算，其他网络得到 `400 network_unsupported`。资产必须是路由在该网络上交易的资产（`GET /v1/cross-chain-swaps/assets`）：用其符号指定，或在 `assetIssuer` 中用其 `contract` 指定。
+- **开放金额。** 所有网络都接受没有 `amount` 的链接：付款方在 checkout 中输入金额，报价和充值都带上它（`amount`），充值正好支付该金额。
+- **这些网络上的商户手续费以路由自身的应用费用方式收取**（其多收款方支持）：`merchantFee.wallet` 是路由内的账户（NEAR 账户 id，或以小写存储的 EVM 地址），以付款方发送的资产、按充值的整数基点记入。商户收到链接金额；`paidBy: recipient` 时为金额减去手续费。路由只向一个链上收款方付款，因此手续费不会发送到链接所在网络的地址；手续费账户从路由中提取。
+- **Stellar、Solana 和 Monad 上的链接也可从其他网络付款**，前提是在主网且没有商户手续费（这些链上的手续费在链上拆分），有无金额均可（公开读取中的 `crossChainPayment`）。没有充值地址的 Monad 链接不行：其 observer 通过商户地址上的金额识别付款，而路由的付款也会到达该地址。
+- **佣金。** 从其他网络付款时，会在链接金额之外向 `NEAR_INTENTS_FEE_RECIPIENT` 支付套餐的 swap 佣金（`X-Plan-Swap-Fee-Bps`）：商户收到链接金额，费用由付款方的充值承担。费率在创建链接时读取（`crossChainFeeBps`），因为充值路由不需要密钥。费率没有收款方时，新网络上的链接会被拒绝（`503 misconfigured`）；在 Stellar、Solana 和 Monad 上，链接创建时不支持从其他网络付款。
+- **无需密钥且有边界。** 充值路由是 `/v1/payment-links/{id}` 下的 `@Public()` 路由，即网关已有的无密钥路由：链接 id 就是凭证。充值只向链接的收款地址支付其金额，只退款到 `refundTo`；同一客户端再次请求同一资产和退款地址时，会拿回它已打开的充值。每个客户端（一个 IPv4 地址或一个 IPv6 /48，仅以 HMAC 形式存储）在每个链接上最多有 `PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT`（2）个未完成充值（`409`），因此持有链接的人无法占用其他付款方的名额；每个链接每 `PAYMENT_DEPOSIT_LINK_WINDOW_MS`（5 分钟）从所有客户端接受 `PAYMENT_DEPOSIT_LINK_BUDGET`（20）个新充值，这是一个会回补的预算，超出时返回 `429` 和 `Retry-After`，而不是可能把付款方挡在外面的未完成充值计数。超过期限仍未付款的充值不计入任何限制。名额在实时报价之前于链接的 advisory lock 下预留（`payment_deposit_reservation`），因此并发请求无法同时通过计数。按客户端地址计预算：`payment-links:deposit-assets`（每分钟 30）、`payment-links:quote`（30）、`payment-links:deposits`（10）、`payment-links:deposit-read`（60）。 商户可以为单个链接提高这两项（创建时或通过 `PATCH` 设置 `depositLimits`），上限为每个付款方 `PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT_CEILING`（10）、每个窗口 `PAYMENT_DEPOSIT_LINK_BUDGET_CEILING`（200），由本服务校验。
+- **最低金额。** 路由有各自的最低金额，且会随时间变化。`GET /v1/payment-intents/{id}/route-check` 按链接金额对主要来源（`PAYMENT_ROUTE_PROBE_ORIGINS`）进行试算报价，供 dashboard 提醒哪些来源无法支付该金额（从不阻止链接）；`deposit-assets` 以 `routes` 返回同样的检查，供 checkout 带原因禁用这些来源。被拒绝的报价返回 `400 provider_error` 及原因，在任何充值地址生成之前显示。
+- **付款方邮箱与收据。** 托管 checkout 在提供任何付款方式之前先要求填写邮箱，并通过 `POST /v1/payment-links/{id}/payer` 将其记录为一个 checkout 会话：第一次调用返回一个随机的 `payerToken`（只存储其 SHA-256，且从不写入日志），页面保存它并在之后的调用中发送（更改邮箱、`events`、`deposits`）。每个会话保留自己的邮箱，任何会话都不能更改其他会话的邮箱，因此第二个访问者永远不会阻挡付款方。会话还可凭 token 在 `events` 上登记其付款方式（`address`，其钱包付款的账户；`txHash`，其钱包返回的交易）。付款成功后，`PaymentReceiptsService` 通过本服务的邮件发送器（`MAIL_*`）以该会话的语言发送收据，在各副本间只认领一次，并由 `PaymentReceiptSweeperService` 在三天内重试：从其他网络付款时发给充值所属的会话（只有它拿到了该充值地址）；否则发给登记的交易与结算相符的会话（仅凭账户不能证明任何事，因为地址是公开的；证明只有在交易链上时间之前至少 `PAYMENT_PAYER_PROOF_MARGIN_MS`（30 秒）登记时才计入；该时间未知时从不计入；两个会话都匹配时也不计入）；否则，当恰好只有一个会话填写了邮箱时发给它；否则不发送（`receiptSkippedAt`），商户可通过 `GET /v1/payment-intents/{id}/payer-emails` 查看填写的邮箱。`sent` 报告不证明任何事，也不决定任何事。只有在有证明（充值或匹配）时，付款方才会被关联到商户的客户（`emailProvidedByPayer: true`：未验证），且从不合并到商户创建的客户。在 checkout 之外扫描的钱包链接不带邮箱，因此无法发送收据。
+- **无人验证的地址，因此收据有边界。** 收据只包含本服务生成的内容（金额、资产、网络、日期、付款 id 和交易，以及指向 checkout 上付款页面和浏览器上交易的链接），从不包含链接的留言或其他商户文字。一个地址每天从所有商户合计最多收到 `PAYMENT_RECEIPT_MAX_PER_RECIPIENT`（10）份收据，一个商户每天最多发送 `PAYMENT_RECEIPT_MAX_PER_MERCHANT`（1000）份：超过任一限制的收据会等待窗口。剩余风险：如果付款方的钱包不报告交易（例如在另一台设备上扫描的钱包链接），在多个会话填写了邮箱的链接上不会自动收到收据；商户可以看到填写的邮箱。
+
+Arc 也是一个支付网络，采用原生结算（见上文 Arc 一节）：`PAYMENT_NETWORKS` 先是所有链，然后是路由覆盖的其他网络，共 36 个。路由不覆盖 Arc，因此 Arc 链接永远不会从其他网络支付。
+
+### 沙盒：测试网上的支付链接
+
+跨链路由没有测试网，因此 `dev` 密钥在通过充值地址付款的网络上创建的链接，由本服务自己的沙盒（`src/sandbox-settlement/`）结算，使用相同的路由、充值状态和 `PAYMENT_INTENT_*` webhook。`GET /v1/payment-intents/networks` 按网络、按调用方的密钥回答：能否在该网络创建链接、使用哪种资产，以及不能时的原因。
+
+- **一笔付款的流程。** 每个充值地址都为这一笔付款从 `SANDBOX_DEPOSIT_SEED` 派生，其路径作为充值的 `correlationId` 保存（私钥从不存储）：EVM 网络上为 BIP-32，硬化路径 `m/44'/60'/7007'/a'/b'`；NEAR（coin 397，隐式账户）、Sui（784）和 Aptos（637）上为 SLIP-0010 ed25519，路径 `m/44'/<coin>'/7007'/a'/b'`。在 XRP Ledger 上，付款方直接向金库本身付款，并且必须附上为这笔付款生成的目标标签（destination tag），即充值的 `depositMemo`：若每笔付款使用一个账户，在任何人能向它付款之前都需要先有储备金和 trustline。`SandboxDepositObserverService` 读取来源测试网上已到账的内容（该地址的测试稳定币余额；在 XRP Ledger 上，是带有该标签的已验证付款，按实际交付金额计）；金额到账后，金库在链接所在的测试网上向商户支付链接金额，充值变为 `SUCCEEDED`，该笔付款作为 intent 的 `txHash`。超过截止时间到账的充值由金库在来源网络上退还给 `refundTo`。每笔付款和退款在广播前先签名并写入 `sandbox_payout`（每个充值和类型一条），然后以相同的字节重复广播直到最终确认，绝不第二次签名，因此崩溃或第二个副本都不会重复付款。无法再执行的转账（超过其 XRP Ledger `LastLedgerSequence`、NEAR 区块哈希或 Aptos 过期时间，或其 Sui 输入已被花费）会使充值以 `FAILED` 结束。
+- **一比一，无佣金。** 只接受并支付该网络的测试稳定币：有官方测试 USDC 的网络用它，没有的网络用 `cUSD`（`contracts/SandboxUsd.sol`，6 位小数，从本仓库部署）。报价一比一，无佣金、无滑点；从不使用主网价格。沙盒链接记录 `crossChainFeeBps` 为 0。开放金额与主网一致；带商户手续费的链接暂不在沙盒中结算（`400 merchant_fee_unsupported`）。
+- **结算网络。** 测试 USDC：Sepolia、Base Sepolia、Arbitrum Sepolia、OP Sepolia、Polygon Amoy、Avalanche Fuji、Plasma Testnet、X Layer Testnet、XRP Ledger Testnet、NEAR Testnet、Sui Testnet 和 Aptos Testnet，Monad Testnet 则作为付款来源网络（Monad 链接以原生方式付款）。cUSD：BNB Smart Chain Testnet、Gnosis Chiado、Berachain Bepolia 和 Robinhood Chain Testnet，需 `SANDBOX_CUSD_ADDRESSES` 写明其部署地址。每个测试 USDC 都在链上返回了其符号和 6 位小数。每个节点在被信任前都会核验，因此沙盒客户端无法连到任何主网：EVM 的 chain id（同时对照 chainlist 核实）、XRP Ledger 的 `network_id` 1、NEAR 的 `chain_id` `testnet`、Sui 的测试网链标识符、Aptos 的 `chain_id` 2。Scroll 的测试网已关闭，因此 Scroll 链接不结算。Abstract（EraVM）、HyperCore、Starknet（其测试 USDC 存在，但从金库付款需要一个已部署的 Starknet 账户和 Stark 曲线签名）以及其他网络暂不结算；网络路由会给出原因。
+- **运维。** 金库支付每一笔付款和退款，因此需要每个网络的 gas 币和测试稳定币；金库没有资金时，充值只会等待（金库暂时付不起的转账不会被签名）。在 EVM 网络上，金库是 `SANDBOX_TREASURY_PRIVATE_KEY` 对应的地址；在 XRP Ledger、NEAR、Sui 和 Aptos 上，金库是每个网络各自的密钥，由该密钥派生（以网络为标签的 HKDF-SHA256），因此不需要其他变量。`npm run sandbox:keys -- --out <file>` 在仓库之外的文件中生成种子、金库密钥和 cUSD 部署密钥，`npm run sandbox:status -- --secrets-file <file>` 打印每个网络上金库的地址和余额，`npm run sandbox:deploy-cusd -- --network bsc --secrets-file <file>` 部署 cUSD 并打印 `SANDBOX_CUSD_ADDRESSES` 的条目。未配置时沙盒关闭，所有通过充值地址付款的网络都对 `dev` 密钥返回 `available: false`。
+- **各网络说明。** XRP Ledger 和 NEAR 在金库持有其 gas 币后需要一次性设置：`npm run sandbox:prepare -- --secrets-file <file>` 在 XRP Ledger 上添加测试 USDC 的 trustline（在此之前，付款方向金库的付款会在其自己的钱包中失败，资金仍在其手中），并在 NEAR 上将金库注册到测试 USDC。在 XRP Ledger 上，付款会一直等待，直到商户账户拥有测试 USDC 的 trustline（只有该账户自己能添加）并接受无需充值授权（deposit authorization）的付款。在 NEAR 上，账户必须先在代币上注册才能持有它：金库在等待付款方时为每个充值账户注册，每笔付款和退款都在同一笔交易中为其收款方注册。在 Sui 上，金库只花费 coin 对象：记入其地址余额（address balance）的测试 SUI 或 USDC 不会被花费，`sandbox:status` 会单独显示。Sui 通过其 GraphQL 服务读取，因为其公共节点已不再响应 JSON-RPC。付款方的充值留在各自的充值地址上，在 XRP Ledger 上则留在金库中（暂不归集）。
+
 ### Solana 与 Monad 上的钱包登录
 
 `POST /v1/wallet/auth/finish` 和 `PUT /v1/wallet/backup` 接受可选的 `chain`，账户以
@@ -719,6 +794,8 @@ Solana 或 Monad 账户签名的挑战在第一行之后多一行 `chain: <chain
 base58）；Monad 用 EIP-191 `personal_sign`（0x 十六进制；拒绝 high-s 签名）。Monad 地址以
 EIP-55 写法保存。恢复设置（`POST /v1/wallet/recovery/setup`）仍仅限 Stellar。账户的 key
 在每条链上都以同样的方式签发（见[没有任何请求依赖开发者平台](#没有任何请求依赖开发者平台)）。
+
+Arc 账户的登录方式与 Monad 账户相同：一行 `chain: arc`、EIP-191 `personal_sign`，以及 EIP-55 写法。
 
 ### 轻松恢复：在两台设备之间迁移钱包
 
@@ -933,6 +1010,8 @@ POST /v1/swaps/quote {chain} → POST /v1/swaps {chain, source} → wallet signs
   ——足够试用，不适合生产。Jupiter 默认使用免 key 档位；设置 `JUPITER_API_KEY` 后，请把
   `JUPITER_BASE_URL` 指向 `https://api.jup.ag/swap/v1`。
 
+Arc 没有兑换路由：校验会拒绝 `chain: arc`（`400 validation_failed`），跨链路由也不覆盖 Arc。
+
 ## 跨链 swap（NEAR Intents）
 
 **跨链** swap 由 [NEAR Intents](https://intents.near.org/) 通过其 1Click API 结算，
@@ -1046,6 +1125,7 @@ NEAR Intents 从输入中扣除它，报价的输出已是扣除后的净额，�
 | 跨链兑换（`POST /v1/cross-chain-swaps`） | NEAR Intents 的第二个 app fee。`wallet` 是 NEAR 账户 id，在 NEAR Intents 内入账。App fee 是存入金额的整数基点，因此费用换算成其对应的基点并向下取整；不足一个基点的费用会被拒绝。使用 `payer` 时，套餐佣金也按更大的存入金额计算 |
 | Solana 支付链接（`POST /v1/payment-intents/pay`，`chain: solana`） | Solana Pay 的 transfer request 只指定一个收款方，因此这类链接（需有 `amount`）是 Solana Pay **transaction request**：`uri` 为 `solana:<PAYMENT_LINK_API_URL>/v1/payment-links/{id}/solana-pay`，钱包向其 POST 付款方账户以获取交易：memo、携带链接 reference 的商户转账，以及手续费转账（缺少的代币账户会创建，由付款方支付）。SOL 手续费须转入已存在的账户。observer 通过 reference 找到它，且只有两部分都支付才会结算 |
 | Monad 支付链接（`POST /v1/payment-intents/pay`，`chain: monad`） | 仅在启用存款地址（`MONAD_RELAYER_PRIVATE_KEY`；否则返回 `merchant_fee_unsupported`）且有 `amount` 时：地址为 `contracts/PaymentSplitForwarder.sol`（手续费的钱包和金额是构造函数的另外两个参数，因此地址承诺了它们），其构造函数先付 relayer 费用，再付商户手续费，最后付商户。链接要求的存款为金额，付款方支付手续费时再加上手续费 |
+| Arc 支付链接（`POST /v1/payment-intents/pay`，`chain: arc`） | 与 Monad 相同：仅在启用充值地址（`ARC_RELAYER_PRIVATE_KEY`；未启用时完全不能创建 Arc 链接：`network_unsupported`）且有 `amount` 时，通过 `contracts/PaymentSplitForwarder.sol` 以链接的资产支付（通过 ERC-20 接口的 USDC、EURC 或其他 ERC-20） |
 | Solana 兑换（`POST /v1/swaps`，`chain: solana`） | Jupiter 每笔兑换只支付一个集成方费用，已被套餐佣金使用，因此手续费转账（从源账户、以源资产支付：SOL 用 System Program 转账，否则先创建钱包的代币账户再 TransferChecked）被追加到 Jupiter 自己的 v0 交易中：复用其地址查找表已加载的账户，重写所有索引，提高其计算单元上限，并以最多 40 个账户请求路由，使其仍能放入一个数据包。SOL 手续费须转入已存在的账户 |
 | 隐私支付（`POST /v1/zk-payments`） | 付款方以 XLM 向 `wallet` 进行第三笔保密转账，使该费用与付款本身一样保密。`wallet` 必须在 Cosmos Pay 的代币上持有审计方 0 下的保密账户（否则返回 `400 recipient_not_registered`），且不能是收款方或手续费账户。0.18% 的佣金仍按 `amount` 计算，记录中的 `amount` 是付款方支付的总额。confirm 以 `merchantFeeTxHash` 接收第三个哈希，并像另外两笔一样校验该转账 |
 | 流动性（`POST /v1/liquidity-pools/deposit` 与 `/withdraw`） | 存入或取出会移动两种资产，因此费用为每种资产的 `bps`（向下取整），在同一笔交易中按每种资产各一笔付款支付给 `wallet`，位于存入操作之后，或位于取出操作及其套餐佣金之后；`fixed` 会被拒绝（`400 validation_failed`）。存入时，`recipient` 从金额中扣除（进入池子的更少），`payer` 在其之上加收。取出时，无论 `paidBy` 为何，费用都从取出所得中按其保证的最低金额的比例扣除。`wallet` 必须存在并对两种资产都有 trustline。记录中的 `amount` / `asset` 是资产 A 的部分，`amountB` / `assetB` 是资产 B 的部分 |
@@ -1221,6 +1301,8 @@ Solana 用 ed25519 对挑战文本签名，Monad 用 EIP-191 `personal_sign`。�
 在 Stellar 上解析，除非 `?chain=` 指定了其他链——不指定链的钱包永远不会拿到它无法支付的
 地址——`GET /v1/aliases/by-address/{address}` 则根据地址本身的格式判断链。Monad 地址以
 EIP-55 写法保存和匹配。
+
+Arc 地址的用法与 Monad 地址相同（`chain: arc`、EIP-191、EIP-55）。仅凭地址无法区分 Arc 和 Monad，因此不带 `?chain=` 的 `by-address` 会把 `0x` 地址当作 Monad：要在 Arc 上查询，请传 `?chain=arc`。
 
 ### 路由
 
@@ -1426,6 +1508,23 @@ CREATED | AWAITING_FUNDING --merchant cancels--> CANCELLED
 | GET | `/v1/onramp/p2p/sessions` | `onramp:read` | 该消费者在密钥网络上的会话 |
 | POST | `/v1/onramp/p2p/sessions` | `onramp:write` | 记录订单并返回其 `widgetUrl` |
 | GET | `/v1/onramp/p2p/sessions/{id}` | `onramp:read` | 其中一个 |
+| POST | `/v1/onramp/p2p/payment-requests` | `onramp:write` | 以二维码展示的一笔本地货币收款，付到你自己的地址（共享公钥可以创建） |
+| GET | `/v1/onramp/p2p/payment-requests` | `onramp:read` | 该消费者在密钥网络上的收款 |
+| GET | `/v1/onramp/p2p/payment-requests/{id}` | `onramp:read` | 其中一个，以及它是否已付款 |
+| POST | `/v1/onramp/p2p/payment-requests/{id}/cancel` | `onramp:write` | 阻止一笔未关闭的收款被支付 |
+| GET | `/v1/payment-links/fiat/{id}` | 无（`@Public()`） | 付款方看到的收款：金额、实时估算、支付方式 |
+| POST | `/v1/payment-links/fiat/{id}/sessions` | 无（`@Public()`） | 付款方开始付款：一笔金额精确的购买，交付给卖家 |
+| POST | `/v1/payment-links/fiat/{id}/direct/login` | 无（`@Public()`） | 付款方开始通过邮件验证，以便在页面上支付 ARS 收款 |
+| POST | `/v1/payment-links/fiat/{id}/direct/login/verify` | 无（`@Public()`） | 邮件中的验证码，换取付款方的会话 |
+| GET | `/v1/payment-links/fiat/{id}/direct/kyc` | 无（`@Public()`） | 付款方的身份验证接下来需要什么 |
+| POST | `/v1/payment-links/fiat/{id}/direct/kyc/details` | 无（`@Public()`） | 付款方的城市和电话 |
+| POST | `/v1/payment-links/fiat/{id}/direct/kyc/phone` | 无（`@Public()`） | 发送到付款方电话的验证码 |
+| GET | `/v1/payment-links/fiat/{id}/direct/accounts` | 无（`@Public()`） | 付款方已保存的银行账户，只给提示 |
+| POST | `/v1/payment-links/fiat/{id}/direct/orders` | 无（`@Public()`） | 通过一位已验证卖家支付精确金额 |
+| GET | `/v1/payment-links/fiat/{id}/direct/orders/{orderId}` | 无（`@Public()`） | 其中一笔付款：转账给谁、截止何时 |
+| POST | `/v1/payment-links/fiat/{id}/direct/orders/{orderId}/paid` | 无（`@Public()`） | 付款方已转账：收款显示为 `processing` |
+| POST | `/v1/payment-links/fiat/{id}/direct/orders/{orderId}/cancel` | 无（`@Public()`） | 取消付款方尚未完成的付款 |
+| POST | `/v1/onramp/p2p/webhooks` | 无（`@Public()`，已签名） | 市场的订单更新 |
 | GET | `/v1/offramp/p2p/market` | `offramp:read` | 货币、支付方式、卖出价和最低额（美元）、各条链以及表单默认的代币（共享公钥可以读取） |
 | GET | `/v1/offramp/p2p/tokens` | `offramp:read` | 同样的代币列表，用于出售（共享公钥可以读取） |
 | POST | `/v1/offramp/p2p/quotes` | `offramp:write` | 出售的确定报价，含费用和兑换；需要集成方 id |
@@ -1443,6 +1542,51 @@ CREATED | AWAITING_FUNDING --merchant cancels--> CANCELLED
 - **没有账户的钱包也能买卖。** 共享公钥可以报价、开启会话，并凭该会话的 `publicToken`（放在 `X-Record-Token` 中）读回这一个会话；它永远不能列出会话，因为所有匿名钱包都是同一个消费者。设置了 `ELDORADO_PUBLIC_REFERRAL_ID` 时，它的报价和会话带上它而不是 `ELDORADO_REFERRAL_ID`：El Dorado 按 referral id 设定集成方佣金，所以申请一个费率最高的 id，匿名使用就付得最多，和兑换一样。
 - **缓存什么。** 市场（货币、价格和链列表）按网络缓存一分钟（`ELDORADO_MARKET_TTL_MS`）；每条链的代币列表缓存一小时（`ELDORADO_TOKENS_TTL_MS`；Ethereum 的约 1.2 MB）。没有价格、最低额或支付方式的货币会被排除，代币列表读取失败或为空的链也会被排除：这会写入日志并在下次读取时重试，只有链列表或所有代币列表都失败时，市场才返回 502。
 
+### 用二维码收款（收款请求）
+
+卖家用二维码收取一笔本地货币，付款方通过同一个市场用本地支付方式付款：代币从市场直接到达卖家自己的地址，Cosmos Pay 从不持有它。`POST /v1/onramp/p2p/payment-requests` 按与购买完全相同的方式，对照实时市场检查条款（货币、金额及其最低额、链和代币；支付方式由付款方稍后选择），并返回 `url`（付款方的页面，`PAYMENT_LINK_CHECKOUT_URL/fiat/<id>`）和 `qr`（该页面的 PNG 二维码）。页面通过 `GET /v1/payment-links/fiat/{id}` 读取这笔收款；付款方选定支付方式后，`POST /v1/payment-links/fiat/{id}/sessions` 开启一笔金额精确、交付给卖家的购买，并返回其 `widgetUrl`。
+
+- **付款方的路由不需要 API key。** 它们位于 `/v1/payment-links/fiat/` 下，因此已经提供 `/v1/payment-links/*` 的网关无 key 路由也会提供它们，而 `fiat/` 这一段把它们与支付链接自己的 `{id}` 路由区分开来。id（一个 `cuid()`）本身就是访问凭证（capability）：响应包含金额、描述、代币、按当前市价的估算以及支付方式，绝不包含卖家的账户或地址、记录 token、会话或交易。读取按每个客户端地址每分钟 60 次计预算（`payment-links-fiat:read`），开始付款为每分钟 10 次（`payment-links-fiat:session`）；两者都返回 `Cache-Control: no-store`。
+- **这笔购买属于卖家。** 它是该请求所属消费者的一个 BUY 会话，带着 `paymentRequestId` 出现在该消费者的 `GET /v1/onramp/p2p/sessions` 中，其 widget 带有该消费者的 referral id：用共享公钥创建的请求带有 `ELDORADO_PUBLIC_REFERRAL_ID`（已设置时），与该公钥自己的会话一样。付款方可以开启不止一笔购买；每一笔都是一个会话，最先完成的那一笔支付该请求。
+- **是否已付款，由市场说了算。** 不读取任何链上数据：只有当市场签名的 webhook 报告该请求的某个会话为 `COMPLETED` 的 `BUY`，交付到该请求的地址、链和代币（不区分大小写），且以该请求的货币支付、金额不少于该请求的金额时（widget 允许买家修改货币和金额，以其他货币支付或金额更少的付款不算这笔收款），请求才会变为 `paid`。`paidAt`、`paidAmount`（交付的代币数量）和 `paidTxHash` 记录第一次这样的完成；之后的完成不改变任何内容。超过 `expiresAt` 的未关闭请求读作 `expired`（从不存储），而已过期或已取消的请求，在一笔已经在进行中的购买完成时仍会变为 `paid`：钱已经到账了。在 webhook 注册之前，没有任何东西会把请求标记为已付款，因此钱包也应关注自己的余额。
+- **Webhook。** `POST /v1/onramp/p2p/webhooks` 是 `@Public()`，并且与法币合作方的 webhook 一样不列入 OpenAPI 契约。只有当 `x-webhook-hash` 是原始请求体的 `sha256`（小写 hex），且 `x-webhook-signature` 是某个网络 JWKS 中的一把密钥对该 hex 所做的 base64 RSA-SHA256 签名时（`ELDORADO_WEBHOOK_JWKS_URL_MAINNET` / `ELDORADO_WEBHOOK_JWKS_URL_TESTNET`，默认为市场自己的），投递才会被接受；验证通过的那把密钥决定它可以修改哪个网络的会话。其他任何情况都是 `401 webhook_signature_invalid`；无法读取的密钥集返回 `503`，这样市场会重新发送该投递。密钥保存在内存中，当某次投递验证不通过时，每个网络每分钟最多重新读取一次。验证通过但没有指明任何会话的投递会写入日志并返回 `200`。每次写入都是有条件的：会话一旦达到 `COMPLETED` 就保持不变，请求只会被支付一次。会话以 `status` 返回市场最近一次的订单状态。
+- **运维步骤。** 市场按 Client ID 注册 webhook，方式是发邮件到签发集成方 id 的同一个地址：把 Client ID 和 URL `https://api.cosmospay.lat/cosmos-api/v1/onramp/p2p/webhooks`（网关的公共前缀，后接 `/v1/onramp/p2p/webhooks`）发给它。网关需要一条只匹配 `POST /v1/onramp/p2p/webhooks` 的无 key 路由，并原样透传请求体；付款方的路由不需要任何新配置。
+- **本版本不包含：** 请求被支付时发出的出站 webhook 事件、请求的仪表盘视图，以及由付款方输入金额的可重复使用二维码。
+
+### 在付款方页面上支付收款（直接）
+
+对于 ARS 收款，付款方可以通过同一个市场付款而无需打开其窗口：只需验证一次，就会在收款自己的页面上被告知把精确金额转账给谁，而本服务代其调用市场的 API（`/v1/payment-links/fiat/{id}/direct/*`）。市场仍是交易对手（付款方是它的客户，由它完成身份验证），代币仍直接到达卖家的地址。卖家和付款方视图中的 `p2pDirect` 表示某笔收款是否提供此方式：收款以 ARS 计价，`p2p` 在其 `methods` 中，且部署设置了 `ELDORADO_CLIENT_ID`、`ELDORADO_API_REFERRAL_ID`（来源类型为 API 的 referral id）和 `P2P_DIRECT_SESSION_SECRET`。`methods` 不变：`p2p` 仍表示市场，页面根据该标志在直接流程与窗口之间选择。
+
+- **步骤。** `login` 向付款方发送邮件验证码（使用 `Accept-Language` 在西班牙语、英语和葡萄牙语中优先的语言），`login/verify` 用它换取一个 `session`。之后 `kyc` 说明下一步要问什么：`details`（城市和电话）、`phone`（短信验证码）、`document`（在 `documentUrl` 进行证件验证）、`review`、`rejected` 或 `ready`。`accounts` 列出付款方本人名下已保存的账户（只给提示，从不给号码），`orders` 从其中一个账户或新的 `account`（会校验其 CVU/CBU 和 CUIT/CUIL 的校验位）发起精确金额的付款，页面轮询该订单：先是 `matching`，然后是带 `payTo` 和 `dueAt` 的 `pay`。付款方在转账后将其标记为 `paid`，或在此之前取消。
+- **会话。** 市场的登录令牌从不以明文离开本服务，也从不存储：`session` 是用从 `P2P_DIRECT_SESSION_SECRET` 派生的密钥以 AES-256-GCM 封装的该令牌，绑定到收款及其网络，并随令牌过期或在两小时后过期，以先到者为准。登录之后的每个路由都在 `X-Payer-Session` 中接收它；缺失、被篡改、已过期或属于其他收款的会话返回 `401 session_expired`。轮换该密钥会让所有付款方退出登录。
+- **id 能解锁的范围仍然有限。** 订单总是按收款金额把收款的代币交付到收款的地址，并在 `externalReferenceId` 中写明该收款；通过某笔收款读取、标记已付或取消的订单必须在那里写明它，否则就是不存在订单的 404。开始任何操作（登录、验证、账户、订单）都需要一笔带 `p2pDirect` 的开放收款；已在进行中的订单在收款过期或已付后仍可查看、标记已付和取消，好让付款方完成已开始的操作。
+- **收款状态。** 将订单标记为已付会因该订单把开放的收款转为 `processing`。之后由市场的 webhook 决定：`COMPLETED` 支付它（与窗口内购买相同的检查），`CANCELLED` 重新打开它（仅当正是该订单使其变为 `processing`；期间到达的银行转账会接管它），`DISPUTED` 使其保持 `processing`。第一笔完成的付款胜出，包括银行转账。从付款方页面读取订单时若发现其为 `COMPLETED` 或 `CANCELLED`，会以同样的方式、同样的检查处理，因此丢失的推送不会让收款一直等待。若到订单截止时间再加一天（`P2P_DIRECT_PROCESSING_GRACE_MS`）两者都未发生，收款会重新开放（`P2pDirectProcessingSweepService`，在 `OBSERVER_ENABLED` 下每五分钟一次）：标记已付款却未转账的付款方不再能冻结它，之后才到达的完成仍会支付它。
+- **保存什么。** 不保存任何关于付款方的信息：无论在数据行还是日志中，都没有邮箱、姓名、账户、证件或令牌（市场的拒绝只按其键名和错误码记录）。订单被记录为卖家的一个 BUY 会话，带有 webhook 用于匹配的订单 id，并以收款页面作为其 `widgetUrl`。
+- **错误与预算。** 收款不能以这种方式支付时返回 `400 method_unavailable`，未开放时返回 `409 request_closed`，以及 `400 invalid_email`、`400 invalid_code`、`400 invalid_phone`、`400 invalid_cbu`、`400 invalid_document`、`400 invalid_bank`、`400 invalid_account`、`409 kyc_required`、`409 too_many_orders`（市场允许一位付款方同时有两笔进行中的付款）、`409 order_not_payable`、`409 order_not_cancellable`，现在无人能接单时返回 `503 no_sellers`，无法连接市场时返回 `503 p2p_unavailable`；其他任何拒绝都是中性的 `400 rejected`。按客户端地址计：每分钟 5 次登录（`payment-links-fiat:direct-login`）、10 次验证码校验（`payment-links-fiat:direct-verify`）、30 次读取（`payment-links-fiat:direct-read`）和 30 次修改（`payment-links-fiat:direct-write`）。此外，登录验证码按电子邮件地址（每小时 5 次，`payment-links-fiat:direct-login-email`，按地址的 HMAC 计数，忽略大小写和 `+tag`）和按收款（每十分钟 20 次，`payment-links-fiat:direct-login-request`）设有预算，合计所有客户端：超出任一预算返回带 `Retry-After` 的 `429 rate_limited`。每个响应都是 `Cache-Control: no-store`。
+- **运维步骤。** 向市场申请一个来源类型为 API 的 referral id（小组件的是 WIDGET 类型），设置为 `ELDORADO_API_REFERRAL_ID`，并设置 `P2P_DIRECT_SESSION_SECRET`（`openssl rand -base64 32`）。这些路由位于网关 `/v1/payment-links/*` 的无 key 路由之下，其 CORS 插件必须允许 `X-Payer-Session` 请求头。
+
+## 银行转账收款
+
+> **一个原生插件。** 本节的全部内容都是 `koywe` 插件
+> （`src/native-plugins/koywe/`），只有在 `PLUGINS_ENABLED` 同时列出 `koywe` 和
+> `eldorado` 时才提供（没有拥有付款请求的 `eldorado` 时它拒绝启动）。它的路由、错误和
+> 公开契约把该提供方称为“银行转账合作方”；只有它的变量和 slug 带有其名称。
+
+阿根廷的付款方用本人名下账户的银行转账以比索支付二维码收款，卖家在自己的地址收到该收款的代币。每个卖家先开立一个银行转账账户：在合作方处 Cosmos Pay 组织下属于卖家自己的商户，由合作方在其托管的表单上完成 KYB 审核，并拥有以卖家名义开立的 ARS CVU 和别名。此后，当收款为 ARS、金额介于 `KOYWE_MIN_ARS` 与 `KOYWE_MAX_ARS` 之间、代币为合作方可交付的代币（Ethereum、Polygon 和 Base 上的 USDC 与 USDT，BNB Chain 上的 USDT；测试网上为 P2P 沙盒列出的每个交易对，在沙盒中兑换），且其所有者的账户已获批时，收款会在 `methods` 中先于 `p2p` 提供 `transfer`。
+
+| 方法 | 路径 | Scope | 用途 |
+| ---- | ---- | ----- | ---- |
+| GET | `/v1/onramp/transfer/account` | `onramp:read` | 卖家账户：状态、验证链接、别名和 CVU |
+| POST | `/v1/onramp/transfer/account` | `onramp:write` | 开立账户（个人或公司，使用 CUIT/CUIL）并启动其 KYB |
+| POST | `/v1/payment-links/fiat/{id}/transfers` | 无（`@Public()`） | 付款方提供 CUIT/CUIL 或 DNI，获得金额、别名和 CVU |
+| POST | `/v1/onramp/transfer/webhooks` | 无（`@Public()`，已签名） | 合作方的存款、兑换订单和 KYB 结果 |
+
+- **资金属于卖家，以卖家名义。** 存款进入卖家自有商户的余额；Cosmos Pay 通过合作方把整笔存款兑换为收款的代币（一个报价和一个 `externalId` 为转账 id 的 ONRAMP 订单），由合作方发送到收款的 `address`。从存款到订单完成，收款显示为 `processing`，之后显示为 `paid` 并带有 `paidMethod: "transfer"`；`processing` 的收款永远不会显示为过期，也不能取消。设置 `KOYWE_POOLED_ENABLED=true` 时，Cosmos Pay 自己的商户（`KOYWE_MERCHANT_ID` / `KOYWE_SANDBOX_MERCHANT_ID`）承接没有获批账户的卖家（包括共享公钥）的收款，资金在这几分钟内经过 Cosmos Pay 的账户。默认关闭。
+- **付款方的证件用于识别存款，且从不保存。** 转账路由接受 CUIT/CUIL（校验位已验证）或 DNI，只保存其 DNI 部分在 `KOYWE_DOCUMENT_PEPPER` 下的 HMAC-SHA256 和三位数字；没有 pepper 时不提供任何转账。同一证件会得到同一笔转账，无论是否新建都以 `200` 响应，因此该路由从不透露某个证件是否已请求支付该笔收款。同一付款方在同一商户的每笔未结转账要求的金额都不同：同金额的第二笔收款会多要几分钱，响应中的 `amount` 就是应转账的金额。
+- **匹配。** 存款支付同一商户中同一证件、要求金额与存款完全相等的未结转账；更大的存款只有在该付款方在那里只有一笔未结转账时才会支付它（并整笔兑换）。无法匹配的存款（其他证件、金额不足、金额更大但有多个候选）以 `unmatched` 存入 `bank_income_event` 并记录为错误：由运维手动退款。转账在其一小时结束后的 24 小时内仍可匹配。
+- **Webhook。** `POST /v1/onramp/transfer/webhooks` 是 `@Public()`，不在 OpenAPI 契约中。只有当 `Koywe-Signature` 是原始请求体在 `KOYWE_WEBHOOK_SECRET` 或 `KOYWE_SANDBOX_WEBHOOK_SECRET` 下的小写十六进制 HMAC-SHA256（以恒定时间比较）时才接受投递；验证成功的密钥决定网络。其他一律为 `401 webhook_signature_invalid`。在应用任何内容之前先保存每个信封 id（重复投递不会改变任何东西），立即返回响应，对合作方的调用随后执行；只有保存失败时才返回 `5xx`，以便合作方重新投递。
+- **卡住的兑换。** 合作方的审批策略必须允许 API 用户在所有商户上创建商户、触发 KYB、创建虚拟账户、CRYPTO 账户和 ONRAMP 订单。被策略挂起的订单或账户会使转账保持 `converting` 并附原因，并记录为错误。清扫任务（每分钟一次，需 `OBSERVER_ENABLED`）重试没有订单的兑换（从一分钟开始，加倍，最多一小时），重新读取十分钟后仍未完成的订单，并每十分钟重新读取待处理的 KYB。失败的订单会让收款停留在 `processing`，比索留在商户余额中：交由运维。
+- **运维步骤。** 每个环境用 `npm run bank-transfer:webhook -- register --network testnet`（以及 `public`）注册一次 webhook；它使用该环境的 webhook 密钥签名，`list` 和 `ping --id <id>` 用于检查。网关需要一条恰好针对 `POST /v1/onramp/transfer/webhooks` 的免密钥路由，原样转发请求体；`/v1/payment-links/*` 已经免密钥。在沙盒中，`npm run bank-transfer:simulate -- --merchant <id> --amount 6000 --document 20123456786` 会端到端触发一笔存款。脚本不打印任何密钥。
 ## 插件 — 以 slug 命名的扩展
 
 其他团队以**插件**的形式把自己的技术集成到本服务：`plugins/` 下的一个目录，在
@@ -1637,7 +1781,8 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 | ---- | ---------- |
 | `blindpay` | KYC、入金、出金、BlindPay webhook、其 `/v1/admin` 路由（`receivers`、`payins`、`payouts`）以及管理概览中的 `fiat` 部分 |
 | `defindex` | `/v1/defindex`——Stellar 上的 DeFindex vaults |
-| `eldorado` | `/v1/onramp/p2p` 和 `/v1/offramp/p2p`：El Dorado 的 P2P 市场所列每条链上的代币，用本地货币买入和卖出 |
+| `eldorado` | `/v1/onramp/p2p` 和 `/v1/offramp/p2p`：El Dorado 的 P2P 市场所列每条链上的代币，用本地货币买入和卖出；二维码收款，经由无需 key 的 `/v1/payment-links/fiat/{id}` 支付；市场的订单 webhook |
+| `koywe` | `/v1/onramp/transfer/account` 和免密钥的 `/v1/payment-links/fiat/{id}/transfers`：通过 ARS 银行转账付入卖家在银行转账合作方处自有账户的付款请求，兑换为请求的代币；合作方的 webhook。需要 `eldorado` |
 | `trustless-work` | `/v1/protected-payments`、无需 key 的 `/v1/protected-payment-links` 以及 `/v1/admin/protected-payments`：Stellar 上基于 Trustless Work 的受保护付款 |
 
 - **未列出即不存在。** `PLUGINS_ENABLED` 未列出的原生插件永远不会被实例化：其路由返回
@@ -1659,6 +1804,63 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 - **受保护付款同样遵守 DeFindex 的规则**：Trustless Work 构建的每个 envelope 在被记录或签名之前都会经过检查，其 submit 只转发这些记录（见*受保护付款（Trustless Work）*）。其买家路由是原生插件中唯一不需要 API key 的路由组。
 
 ## 升级 — 破坏性变更与部署说明
+
+### 通过 P2P 市场在付款方页面上支付的收款（直接）
+
+- **迁移 `20261113120000_p2p_direct_orders` 和 `20261124120000_p2p_direct_processing_deadline`** 为 `p2p_payment_request` 添加可为空的 `processingSessionId` 和 `processingUntil`（并在 `status, processingUntil` 上建索引）；不改写任何数据。新构建上线前运行 `migrate deploy`。
+- **收款请求（新增字段）：** 卖家和付款方视图中的 `p2pDirect`。`processing` 现在也可能表示直接订单的付款方声称已转账：订单完成时变为 `paid`，订单取消时重新变为 `open`。
+- **新的无 key 路由**，位于 `/v1/payment-links/fiat/{id}/direct/` 下：`login`、`login/verify`、`kyc`、`kyc/details`、`kyc/phone`、`accounts`、`orders`、`orders/{orderId}`、`orders/{orderId}/paid` 和 `orders/{orderId}/cancel`。新的错误码：`session_expired`（401），`invalid_email`、`invalid_code`、`invalid_phone`、`invalid_account`、`invalid_cbu`、`invalid_bank` 和 `rejected`（400），`kyc_required`、`too_many_orders`、`order_not_payable` 和 `order_not_cancellable`（409），`p2p_unavailable` 和 `no_sellers`（503）。新的预算：`payment-links-fiat:direct-login`（每个客户端地址每分钟 5 次）、`payment-links-fiat:direct-verify`（10）、`payment-links-fiat:direct-read`（30）和 `payment-links-fiat:direct-write`（30），以及 `payment-links-fiat:direct-login-email`（每个电子邮件地址每小时 5 次）和 `payment-links-fiat:direct-login-request`（每笔收款每十分钟 20 次）。
+- **直接订单是卖家的一个会话**（`GET /v1/onramp/p2p/sessions`），其 `widgetUrl` 是收款自己的页面，因为没有窗口。
+- **配置前保持关闭：** 设置 `ELDORADO_API_REFERRAL_ID` 和 `P2P_DIRECT_SESSION_SECRET`（以及 `ELDORADO_CLIENT_ID`）。**网关：** 在无 key 的 `/v1/payment-links/*` 路由的 CORS `allow_headers` 中加入 `X-Payer-Session`；无需新路由。
+
+### 银行转账收款：一个新的原生插件、五张表和 `processing`
+
+- **迁移 `20261112180000_bank_transfer_charges`** 创建 `bank_transfer_account`、`bank_transfer`、`bank_transfer_webhook_event`、`bank_income_event` 和 `bank_transfer_crypto_account`，并为 `p2p_payment_request` 添加 `methods` 和 `paidMethod`（已有行会被填充：`["p2p"]`，已支付的为 `p2p`）。在新构建提供服务前运行 `migrate deploy`。
+- **付款请求（新增字段）：** 卖家和付款方视图中的 `methods`、卖家视图中的 `paidMethod`，以及状态 `processing`。按 `status` 分支的客户端必须处理 `processing`（已收款，代币在途）：它永远不会显示为过期，也不能取消（`409 request_closed`）。
+- **新路由**（插件 `koywe`）：`GET` 和 `POST /v1/onramp/transfer/account`、免密钥的 `POST /v1/payment-links/fiat/{id}/transfers` 以及 `POST /v1/onramp/transfer/webhooks`。新错误码：`invalid_document`、`method_unavailable` 和 `invalid_tax_id`（400）、`account_required`（403）、`account_exists`（409）、`transfer_unavailable`（503）。新预算：`payment-links-fiat:transfer`（每个客户端地址每分钟 10 次）和 `onramp-transfer:account`（5 次）。
+- **配置前保持关闭：** 将 `koywe` 加入 `PLUGINS_ENABLED`（与 `eldorado` 一起），设置每个环境的 `KOYWE_*` 变量和 `KOYWE_DOCUMENT_PEPPER`，添加网关路由，注册 webhook 和合作方的策略规则（见*银行转账收款*）。
+
+### Arc：第四条原生结算的链
+
+- **`arc` 是 `chain` 的新取值**，适用于支付意图和链接、客户钱包、别名和钱包登录，也出现在每个列出链的 OpenAPI 枚举中（`PAYMENT_NETWORKS` 现在有 36 项，`GET /v1/payment-intents/networks` 多一行）。对 `chain` 做分支判断的客户端应处理它。现有内容不变：Monad 保持原有行为和变量，未指定链的 `0x` 地址仍按 Monad 读取。
+- **无需迁移：** 链以文本存储，Arc 的充值地址与 Monad 的一起存入 `evm_deposit_address`（`chain = 'arc'`）。
+- **新变量，均为可选：** `ARC_RPC_URL_MAINNET`、`ARC_RPC_URL_TESTNET`、`ARC_RPC_TIMEOUT_MS`、`ARC_LOG_BLOCK_RANGE`、`ARC_RELAYER_PRIVATE_KEY`、`ARC_DEPOSIT_TOKEN_FEES`。没有 relayer 密钥时，Arc 链接会被拒绝（`400 network_unsupported`），`GET /v1/payment-intents/networks` 将 Arc 报告为不可用；有密钥时，请在每个层级为其地址充值 USDC（见 Arc 一节）。启动时会拒绝与 `MONAD_RELAYER_PRIVATE_KEY` 相同的 `ARC_RELAYER_PRIVATE_KEY`。
+- **Monad 与 Arc：已部署 forwarder 上的小额余额不再被 flush。** forwarder 部署后到账的余额，只有值得 gas 时 relayer 才会 flush：高于该充值自身的手续费，或对没有手续费的代币而言达到意图的完整金额（开放金额永不）。更小的余额留在 forwarder 中，任何人都可以调用 `flush` / `flushToken`，它们只会付给商户。充值手续费的报价也从不低于该链的 gas 下限（Arc 为 20 gwei）。
+- **Arc 不支持：** 同链兑换和跨链兑换、来自其他网络的付款、USDT0、受保护付款、私密付款以及沙盒。兑换路由在校验时拒绝 `arc`。
+- **Monad：回滚的交易不再使意图失败。** `POST /v1/payment-intents/{id}/validate` 过去会在一笔回滚交易调用了代币的 `transfer(payee, amount)` 或向收款方发送了该金额时，把 Monad 意图标记为 `FAILED`。这样的交易不带任何属于该意图的内容，因此任何人只需付 gas 就能把意图变成 `FAILED`（终态）。现在在 Monad 和 Arc 上它只是普通的不匹配（`valid: false`，状态不变）；由 memo 或 reference 绑定的 Stellar 和 Solana 不变。
+
+### 支付链接：测试网沙盒
+
+- **迁移 `20261117130000_sandbox_payouts`** 创建 `sandbox_payout` 表；不改写任何数据。
+- **`dev` 密钥可以在沙盒结算的、通过充值地址付款的网络上创建链接**（此前在所有这些网络上都得到 `400 network_unsupported`）。此类链接使用该网络的测试稳定币，并记录 `crossChainFeeBps` 为 0。
+- **新路由：** `GET /v1/payment-intents/networks`（`payments:read`，共享公钥可以调用）。
+- **新变量，均为可选：** `SANDBOX_DEPOSIT_SEED`、`SANDBOX_TREASURY_PRIVATE_KEY`、`SANDBOX_RPC_URLS`、`SANDBOX_CUSD_ADDRESSES`、`SANDBOX_RPC_TIMEOUT_MS`。前两个只在需要结算测试付款的部署上设置，并使用专为沙盒生成的密钥：启动时会拒绝与 `MONAD_RELAYER_PRIVATE_KEY` 相同的金库密钥。
+- **XRP Ledger、NEAR、Sui 和 Aptos 测试网也会结算**，无需新变量：它们的金库由 `SANDBOX_TREASURY_PRIVATE_KEY` 派生。运行 `npm run sandbox:status -- --secrets-file <file>` 查看它们的地址，为每个金库充入其 gas 币和测试 USDC，然后运行一次 `npm run sandbox:prepare -- --secrets-file <file>`（XRP Ledger 的 trustline、NEAR 的代币注册）。Scroll 不再结算：其测试网已关闭，`SANDBOX_CUSD_ADDRESSES` 中的 `scroll` 条目会被忽略。
+
+### 支付链接：所有网络上的开放金额、商户手续费和收据
+
+- **迁移 `20261117120000_payment_link_payer_and_limits`** 为 `payment_intent` 增加可空列（`payerEmail`、`payerLang`、`receiptClaimedAt`、`receiptSentAt`、`depositMaxPerPayer`、`depositBudgetPerWindow`），为 `payment_deposit` 增加（`payerEmail`、`payerLang`、`merchantFee`），并增加 `customer.emailProvidedByPayer`（默认 `false`）。在每个数据库上运行 `migrate deploy`。
+- **迁移 `20261117121000_payment_receipt_safety`、`20261117122000_payment_payer_sessions`、`20261117123000_payment_payer_session_proof` 和 `20261117124000_payment_intent_paid_on_chain_at`** 增加 `payment_intent.receiptTo`、`receiptToAt` 和 `receiptSkippedAt`、表 `payment_payer_session` 以及 `payment_deposit.payerSessionId`，并删除本版本第一个迁移添加的付款方列（`payment_intent.payerEmail`、`payerLang`；`payment_deposit.payerEmail`、`payerLang`），这些列从未存放数据。收据不再包含链接的留言。
+- **新路由：** 无密钥的 `POST /v1/payment-links/{id}/payer`（返回 `payerToken`）、`GET /v1/payment-intents/{id}/route-check` 和 `GET /v1/payment-intents/{id}/payer-emails`（`payments:read`）。`POST /v1/payment-links/{id}/deposits` 现在要求 `payerToken`，`events` 也接受它以及 `address` 和 `txHash`；没有金额的链接上，报价和充值接受 `amount`；`deposit-assets` 在 `data` 旁返回 `routes`。
+- **收据需要邮件发送器：** 设置 `MAIL_FROM` 以及 `MAIL_RESEND_API_KEY` 或 `MAIL_SMTP_*`。缺少时收据会等待（并记录日志），在配置发送方后的三天内发出。
+- **新增响应字段：** 支付意图（及其 webhook）上的 `depositLimits`、`receiptTo`、`receiptSentAt` 和 `receiptSkippedAt`，充值上的 `merchantFee`，客户上的 `emailProvidedByPayer`。
+
+### 支付链接：所有网络，可从任意网络付款
+
+- **迁移 `20261116120000_payment_deposits`** 创建 `payment_deposit` 与 `payment_deposit_reservation` 表，并为 `payment_intent` 增加两个可空列（`crossChainFeeBps`、`paidFrom`）；不改写任何已有数据。在新版本提供服务前，在每个数据库上运行 `migrate deploy`。
+- **支付意图的 `chain` 新增 32 个网络**（`POST /v1/payment-intents/pay`、列表筛选、响应和 webhook 负载）。按 `stellar`、`solana`、`monad` 分支的集成必须处理其他网络。公开读取中 `payTo` 现在可为空（在这些网络上为 null），并新增 `crossChainPayment`；所有者读取和 webhook 中新增 `paidFrom`。
+- **新路由：** 无密钥的 `GET /v1/payment-links/{id}/deposit-assets`、`POST /v1/payment-links/{id}/quote`、`POST /v1/payment-links/{id}/deposits` 和 `GET /v1/payment-links/{id}/deposits/{depositId}`，以及 `GET /v1/payment-intents/{id}/deposits`（`payments:read`）。网关的无密钥 `/v1/payment-links/*` 路由已支持 GET 和 POST。
+- **没有新变量**，但凡是套餐收取 swap 佣金的部署都必须设置 `NEAR_INTENTS_FEE_RECIPIENT`：否则新网络上的链接会被拒绝（`503`），Stellar、Solana 或 Monad 上的链接创建时不支持从其他网络付款。充值 observer 与其他 observer 一起运行（`OBSERVER_ENABLED`）。
+
+### P2P 入金：以本地货币计的二维码收款，以及市场的订单 webhook
+
+- **迁移 `20261112120000_p2p_payment_requests`** 创建 `p2p_payment_request` 表，并为 `p2p_ramp_session` 添加可空列（`paymentRequestId`、`providerOrderId`、`providerStatus`、`deliveredAmount`、`txHash`、`completedAt`）；不改写任何内容。在新构建提供服务前运行 `migrate deploy`。
+- **新路由**（`eldorado` 插件）：`POST` 和 `GET /v1/onramp/p2p/payment-requests`、`GET /v1/onramp/p2p/payment-requests/{id}`、`POST /v1/onramp/p2p/payment-requests/{id}/cancel`，无需 key 的 `GET /v1/payment-links/fiat/{id}` 和 `POST /v1/payment-links/fiat/{id}/sessions`，以及 `POST /v1/onramp/p2p/webhooks`。新错误码：`request_closed`（409）和 `webhook_signature_invalid`（401）。
+- **会话新增两个可空字段**（仅新增）：`status`，即市场对该订单的最新状态，以及 `paymentRequestId`。
+- **网关：** 为恰好是 `POST /v1/onramp/p2p/webhooks` 的请求添加一条无 key 路由。`/v1/payment-links/*` 已经无需 key；其 CORS 插件必须允许 `POST`，与支付链接自己的路由一样。
+- **注册 webhook：** 通过邮件连同 Client ID 向市场注册 `https://api.cosmospay.lat/cosmos-api/v1/onramp/p2p/webhooks`。在此之前，没有任何请求会被标记为已付款。
+- **可选变量** `ELDORADO_WEBHOOK_JWKS_URL_MAINNET` 和 `ELDORADO_WEBHOOK_JWKS_URL_TESTNET`（默认：市场自己的 JWKS）。
+- **新预算：** `onramp-p2p:payment-request`（按 consumer 和客户端地址计，每分钟 20 次），以及按客户端地址计的 `payment-links-fiat:read`（60）和 `payment-links-fiat:session`（10）。
 
 ### 兑换、流动性、隐私支付、跨链兑换和 USDT0：按 id 访问的记录遵循密钥的网络
 
@@ -2349,6 +2551,17 @@ curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops"
 | `MONAD_LOG_BLOCK_RANGE` | 否 | `100` | 一次 `eth_getLogs` 可覆盖的区块数——RPC 服务商的上限（公共 RPC 允许 100） |
 | `MONAD_RELAYER_PRIVATE_KEY` | 否 | — | relayer 密钥（32 字节 hex）。设置后每个 Monad 意图都有自己的充值地址，relayer 会扣除手续费后把充值转发给商户。只存放 gas 资金：它部署的转发合约不能向其他任何人付款 |
 | `MONAD_DEPOSIT_TOKEN_FEES` | 否 | — | 每种 ERC-20 充值的 relayer 手续费，JSON `{"0xToken": "0.05"}`，以代币单位计。未配置的代币免费转发（gas 由 relayer 支付） |
+| `ARC_RPC_URL_MAINNET` | 否 | `https://rpc.mainnet.arc.io` | `prod` 密钥使用的 Arc RPC（chain id 5042，使用前校验） |
+| `ARC_RPC_URL_TESTNET` | 否 | `https://rpc.testnet.arc.io` | `dev` 密钥使用的 Arc RPC（Arc Testnet，chain id 5042002） |
+| `ARC_RPC_TIMEOUT_MS` | 否 | `10000` | 单次 Arc RPC 调用的时间预算（毫秒） |
+| `ARC_LOG_BLOCK_RANGE` | 否 | `5000` | Arc 上一次 `eth_getLogs` 可覆盖的区块数：服务商的上限（公共 RPC 允许 10,000） |
+| `ARC_RELAYER_PRIVATE_KEY` | 否 | 无 | Arc relayer 密钥（32 字节 hex），与 Monad 上的 `MONAD_RELAYER_PRIVATE_KEY` 相同：设置后每个 Arc 链接都有自己的充值地址；未设置时 Arc 链接会被拒绝。只存放 gas 资金（USDC）；绝不能是沙盒金库或 Monad relayer 的密钥（启动时两者都会被拒绝） |
+| `ARC_DEPOSIT_TOKEN_FEES` | 否 | 无 | Arc 上每种 ERC-20 充值的 relayer 手续费，JSON `{"0xToken": "0.05"}`，以代币单位计。USDC 无需配置（其手续费按 gas 定价）；其他未配置的代币免费转发 |
+| `SANDBOX_DEPOSIT_SEED` | 否 | 无 | 沙盒的 HD 种子（16 到 64 字节，hex）。与 `SANDBOX_TREASURY_PRIVATE_KEY` 一起开启沙盒：`dev` 密钥在通过充值地址付款的网络上的链接在测试网上结算。仅限测试资金 |
+| `SANDBOX_TREASURY_PRIVATE_KEY` | 否 | 无 | 沙盒金库密钥（32 字节 hex）：在 EVM 测试网上支付沙盒的付款和退款，并作为其他每个测试网上金库自有密钥的根（按网络 HKDF 派生）。绝不能是主网密钥；启动时拒绝 `MONAD_RELAYER_PRIVATE_KEY` / `ARC_RELAYER_PRIVATE_KEY` |
+| `SANDBOX_RPC_URLS` | 否 | 测试网公共 RPC | 逗号分隔的 `net=url` 对，替换某个测试网的节点（JSON-RPC URL；`sui` 例外，为 GraphQL URL；`aptos` 为其 REST API 的 `/v1` 基础地址）。每个在被信任前都会核验其测试网的链身份 |
+| `SANDBOX_CUSD_ADDRESSES` | 否 | 无 | `net=0x...` 对：cUSD 的部署地址（`npm run sandbox:deploy-cusd`）。没有条目的 cUSD 网络保持不可用 |
+| `SANDBOX_RPC_TIMEOUT_MS` | 否 | `15000` | 沙盒对测试网单次调用的时间预算（ms） |
 | `STELLAR_BASE_FEE` | 否 | `100` | 构建交易时使用的 Stellar 基础手续费（stroops） |
 | `STELLAR_TX_TIMEOUT` | 否 | `300` | 交易超时（秒） |
 | `STELLAR_SWAP_FEE_WALLET` | 手续费 > 0 时 | — | 收取 swap 手续费的平台 G... 账户 |
@@ -2413,7 +2626,26 @@ curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops"
 | `ELDORADO_CLIENT_ID` | 否 | 无 | El Dorado 发给集成方的 ClientID。与 `ELDORADO_REFERRAL_ID` 一起开启 `POST /v1/onramp/p2p/quotes` 和 `POST /v1/offramp/p2p/quotes` 并为每个会话的订单做归属；两者缺一，这些路由返回 `503 misconfigured` |
 | `ELDORADO_REFERRAL_ID` | 否 | 无 | 与 `ELDORADO_CLIENT_ID` 配套的 ReferralID |
 | `ELDORADO_PUBLIC_REFERRAL_ID` | 否 | 无 | 共享公钥的报价和会话代替 `ELDORADO_REFERRAL_ID` 携带的 ReferralID；向 El Dorado 申请佣金最高的一个。为空：公钥使用 `ELDORADO_REFERRAL_ID` |
+| `ELDORADO_API_REFERRAL_ID` | 否 | 无 | 来源类型为 API（而非小组件）的 ReferralID：直接流程的登录、报价和订单携带它。与 `ELDORADO_CLIENT_ID` 和 `P2P_DIRECT_SESSION_SECRET` 一起，开启在付款方页面上支付 ARS 收款（`p2pDirect`）。为空：该流程关闭 |
+| `P2P_DIRECT_SESSION_SECRET` | 否 | 无 | base64 或 hex 形式的 32 个或以上随机字节（`openssl rand -base64 32`）：把付款方在市场的登录封装进页面保存的 `X-Payer-Session`（AES-256-GCM）。必须与其他所有密钥不同；轮换它会让所有付款方退出登录。为空：直接流程关闭 |
 | `ELDORADO_TIMEOUT_MS` | 否 | `10000` | 对 P2P 市场单次调用的预算（ms） |
+| `ELDORADO_WEBHOOK_JWKS_URL_MAINNET` | 否 | `https://api.eldorado.io/api/.well-known/jwks.json` | P2P 市场发布其主网订单 webhook 签名密钥的位置（`POST /v1/onramp/p2p/webhooks`） |
+| `ELDORADO_WEBHOOK_JWKS_URL_TESTNET` | 否 | `https://api-testnet.eldorado.io/api/.well-known/jwks.json` | 沙盒的同一项 |
+| `KOYWE_API_URL` | 否 | `https://api.koywe.com` | 银行转账合作方的生产 API（`public` 网络的收款） |
+| `KOYWE_API_KEY` | 主网银行转账需要 | — | 合作方的 API 密钥；与 `KOYWE_SECRET`、`KOYWE_ORGANIZATION_ID` 和 `KOYWE_WEBHOOK_SECRET` 一起开启主网银行转账 |
+| `KOYWE_SECRET` | 与 API 密钥一起 | — | 该 API 密钥的 secret |
+| `KOYWE_ORGANIZATION_ID` | 与 API 密钥一起 | — | Cosmos Pay 在合作方处的组织：卖家账户是其下的商户 |
+| `KOYWE_MERCHANT_ID` | 资金池模式需要 | — | Cosmos Pay 自己的商户，仅在 `KOYWE_POOLED_ENABLED` 时使用 |
+| `KOYWE_WEBHOOK_SECRET` | 与 API 密钥一起 | — | 注册 webhook 端点时使用的密钥（32 个字符或以上）；投递用它验证。必须与沙盒的不同 |
+| `KOYWE_SANDBOX_API_URL` | 否 | `https://api-sandbox.koywe.com` | 合作方的沙盒（`testnet` 网络的收款） |
+| `KOYWE_SANDBOX_API_KEY`, `KOYWE_SANDBOX_SECRET`, `KOYWE_SANDBOX_ORGANIZATION_ID`, `KOYWE_SANDBOX_MERCHANT_ID`, `KOYWE_SANDBOX_WEBHOOK_SECRET` | 测试网银行转账需要 | — | 沙盒的同一组变量 |
+| `KOYWE_SANDBOX_NETWORK` | 否 | `POLYGON` | 沙盒兑换每笔测试收款的网络：`ETHEREUM`、`POLYGON`、`BASE` 或 `BSC` |
+| `KOYWE_SANDBOX_TOKEN` | 否 | `USDT` | 兑换成的代币：`USDC` 或 `USDT`（`BSC` 上仅 `USDT`） |
+| `KOYWE_POOLED_ENABLED` | 否 | `false` | 让 Cosmos Pay 的商户承接没有获批账户的卖家的收款（资金经过 Cosmos Pay 的账户） |
+| `KOYWE_DOCUMENT_PEPPER` | 银行转账需要 | — | 对付款方证件做哈希的密钥（32 个字符或以上）。没有它就不提供任何银行转账。存在未结转账时切勿更改 |
+| `KOYWE_ACCOUNT_HOLDER` | 否 | — | 资金池账户显示的户名 |
+| `KOYWE_ALIAS`, `KOYWE_CVU` | 否 | — | 替换资金池账户的别名和 CVU（22 位） |
+| `KOYWE_MIN_ARS`, `KOYWE_MAX_ARS` | 否 | `1000`, `5000000` | 收款可通过银行转账要求的金额范围 |
 | `TRUSTLESS_WORK_API_KEY_TESTNET` | 测试网上的受保护付款需要 | — | Trustless Work 的测试网 API key（供 `dev` key 使用）。仅当 `PLUGINS_ENABLED` 包含 `trustless-work` 时路由才存在；没有该 key 时，它们在测试网上返回 `503 misconfigured`。需要同时设置 `TRUSTLESS_WORK_PLATFORM_SECRET_TESTNET` |
 | `TRUSTLESS_WORK_BASE_URL_TESTNET` | 否 | `https://dev.api.trustlesswork.com` | 测试网的 Trustless Work V1 API |
 | `TRUSTLESS_WORK_PLATFORM_SECRET_TESTNET` | 与 API key 一起 | — | Cosmos Pay 的平台账户（S...）：为部署和平台发起的争议签名，支付其 XLM，并接收平台手续费。必须信任 USDC。这是热密钥：请归集其上的手续费 |

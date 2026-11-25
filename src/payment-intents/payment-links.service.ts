@@ -3,6 +3,16 @@ import { ConfigService } from '@nestjs/config';
 import type { Prisma } from '@generated/prisma/client';
 import { CHAIN_ADDRESS_RULES } from '@/chains/chain-address';
 import { isChain } from '@/chains/chains.constants';
+import { acceptsCrossChainPayment } from '@/payment-intents/payment-deposit-rules';
+import {
+  newPayerToken,
+  payerTokenHash,
+} from '@/payment-intents/payment-payer-session';
+import type { PayerSessionEntity } from '@/payment-intents/entities/payment-deposit.entity';
+import {
+  isPaymentNetwork,
+  PAYMENT_NETWORK_RULES,
+} from '@/payment-intents/payment-networks';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { readMerchantFeeRecord } from '@/common/merchant-fee/merchant-fee';
 import type { AppConfig, StellarNetwork } from '@/config/configuration';
@@ -25,6 +35,7 @@ import {
 import { PAY_TO } from '@/payment-intents/pay-to';
 import { Sep7LinkBuilder } from '@/payment-intents/sep7-link-builder.service';
 import type { CheckoutEvent } from '@/payment-intents/payment-intents.constants';
+import type { PayerContactDto } from '@/payment-intents/dto/payment-deposit.dto';
 
 /**
  * The columns the public read loads: what a payer is shown, plus `destination`
@@ -65,6 +76,8 @@ export const PAYMENT_LINK_SELECT = {
   expiresAt: true,
   createdAt: true,
   checkoutTheme: true,
+  // Never answered: it only decides `crossChainPayment`.
+  crossChainFeeBps: true,
 } as const satisfies Prisma.PaymentIntentSelect;
 
 /** An intent as the public read loads it. */
@@ -100,10 +113,10 @@ export function toPublicPaymentLink(
   qr: string,
 ): PublicPaymentLinkEntity {
   const chain = row.chain;
-  if (!isChain(chain)) {
-    // Every write goes through a DTO that only admits the three chains, so this
-    // is a corrupt row. A 500 beats showing a payer an address that may not be
-    // the one their wallet will pay.
+  if (!isPaymentNetwork(chain)) {
+    // Every write goes through a DTO that only admits `PAYMENT_NETWORKS`, so
+    // this is a corrupt row. A 500 beats showing a payer an address that may
+    // not be the one their wallet will pay.
     throw new Error(`Payment intent ${row.id} is on unknown chain "${chain}"`);
   }
   return {
@@ -112,7 +125,9 @@ export function toPublicPaymentLink(
     chain,
     network: row.network,
     status: row.status,
-    payTo: PAY_TO[chain](row),
+    // A link on a network with no wallet link of its own is paid through a
+    // deposit address made per payment: there is no address to show.
+    payTo: isChain(chain) ? PAY_TO[chain](row) : null,
     amount: row.amount,
     asset: row.asset,
     assetIssuer: row.assetIssuer,
@@ -124,6 +139,7 @@ export function toPublicPaymentLink(
     networkFee: row.networkFee,
     merchantFee: readMerchantFeeRecord(row.merchantFee),
     payerAccountRequired: payerAccountRequired(row),
+    crossChainPayment: acceptsCrossChainPayment(row),
     expiresAt: row.expiresAt ? row.expiresAt.toISOString() : null,
     createdAt: row.createdAt.toISOString(),
     checkoutTheme: effectiveCheckoutTheme(row.checkoutTheme),
@@ -182,7 +198,12 @@ export class PaymentLinksService {
    * happened changes nothing but what the owner reads. Anything else is ignored,
    * and an unknown id answers as the read does.
    */
-  async recordEvent(id: string, event: CheckoutEvent): Promise<void> {
+  async recordEvent(
+    id: string,
+    event: CheckoutEvent,
+    payerToken?: string,
+    proof: { address?: string; txHash?: string } = {},
+  ): Promise<void> {
     const now = new Date();
     const changed =
       event === 'walletOpened'
@@ -200,12 +221,137 @@ export class PaymentLinksService {
               UPDATE "payment_intent"
                  SET "checkoutSentAt" = ${now}
                WHERE "id" = ${id} AND "status" = 'PENDING'`;
-    if (changed > 0) return;
+    if (changed > 0) {
+      // From a checkout session: `sent` is noted (informational, never the
+      // receipt's decision), and an address or transaction the wallet gave is
+      // registered as that session's proof (`receiptRecipient`). Only while the
+      // link is open, so every proof precedes the settlement.
+      if (payerToken) {
+        const data = {
+          ...(event === 'sent' ? { sentAt: now } : {}),
+          ...(await this.sessionProof(id, proof, now)),
+        };
+        if (Object.keys(data).length > 0) {
+          await this.prisma.paymentPayerSession.updateMany({
+            where: { intentId: id, tokenHash: payerTokenHash(payerToken) },
+            data,
+          });
+        }
+      }
+      return;
+    }
     const exists = await this.prisma.paymentIntent.findUnique({
       where: { id },
       select: { id: true },
     });
     if (!exists) throw ApiError.notFound(`Payment intent ${id} not found`);
+  }
+
+  /**
+   * The proof a session registers, normalized by the link's own network rules:
+   * the account its wallet pays from, the transaction its wallet answered. A
+   * value that is not one of that network's is refused (400), never stored.
+   */
+  private async sessionProof(
+    id: string,
+    proof: { address?: string; txHash?: string },
+    now: Date,
+  ): Promise<{
+    walletAddress?: string;
+    walletTxHash?: string;
+    provenAt?: Date;
+  }> {
+    if (!proof.address && !proof.txHash) return {};
+    const intent = await this.prisma.paymentIntent.findUnique({
+      where: { id },
+      select: { chain: true, txHash: true },
+    });
+    if (!intent || !isPaymentNetwork(intent.chain)) return {};
+    const rules = PAYMENT_NETWORK_RULES[intent.chain];
+    const out: { walletAddress?: string; walletTxHash?: string } = {};
+    if (proof.address) {
+      if (!rules.address.isValid(proof.address.trim())) {
+        throw ApiError.badRequest(
+          ApiErrorCode.ValidationFailed,
+          `address is not an account on this payment's network (${rules.address.expected})`,
+        );
+      }
+      out.walletAddress = rules.address.normalize(proof.address.trim());
+    }
+    if (proof.txHash) {
+      if (!rules.txId.isValid(proof.txHash.trim())) {
+        throw ApiError.badRequest(
+          ApiErrorCode.ValidationFailed,
+          `txHash is not a transaction id of this payment's network (${rules.txId.expected})`,
+        );
+      }
+      out.walletTxHash = rules.txId.normalize(proof.txHash.trim());
+      // A transaction the observer has already seen, or one this service sent
+      // itself (a deposit address's forward), is public: it proves nothing.
+      const seen =
+        (intent.txHash &&
+          rules.txId.isValid(intent.txHash) &&
+          rules.txId.normalize(intent.txHash).toLowerCase() ===
+            out.walletTxHash.toLowerCase()) ||
+        (await this.prisma.evmDepositAddress.count({
+          where: {
+            forwardTxHash: { equals: out.walletTxHash, mode: 'insensitive' },
+          },
+        })) > 0;
+      if (seen) {
+        throw ApiError.badRequest(
+          ApiErrorCode.ValidationFailed,
+          'txHash was already seen on-chain for this payment: it cannot be registered as proof',
+        );
+      }
+    }
+    return { ...out, provenAt: now };
+  }
+
+  /**
+   * The payer's email and checkout language, from one hosted checkout session
+   * of an open link, before it shows how to pay. Each session keeps its own
+   * email (a row of `payment_payer_session`), so nobody holding the link can
+   * overwrite or lock another payer's: without a token (or with one this link
+   * does not know) a new session is opened and its token answered once; with
+   * its token a session changes only its own email. Only the token's SHA-256
+   * is stored, and the token is never logged. Unverified by nature: whoever
+   * holds the link can type any address, and the customer it makes says so.
+   */
+  async recordPayer(
+    id: string,
+    contact: PayerContactDto,
+  ): Promise<PayerSessionEntity> {
+    const intent = await this.prisma.paymentIntent.findUnique({
+      where: { id },
+      select: { status: true },
+    });
+    if (!intent) throw ApiError.notFound(`Payment intent ${id} not found`);
+    if (intent.status !== 'PENDING') {
+      throw ApiError.badRequest(
+        ApiErrorCode.InvalidStateTransition,
+        `Payment intent ${id} is ${intent.status}: it can no longer be paid`,
+      );
+    }
+    const email = contact.email.trim().toLowerCase();
+    const lang = contact.lang ?? 'en';
+    if (contact.payerToken) {
+      const changed = await this.prisma.paymentPayerSession.updateMany({
+        where: { intentId: id, tokenHash: payerTokenHash(contact.payerToken) },
+        data: { email, lang },
+      });
+      if (changed.count > 0) return { payerToken: contact.payerToken };
+    }
+    const payerToken = newPayerToken();
+    await this.prisma.paymentPayerSession.create({
+      data: {
+        intentId: id,
+        tokenHash: payerTokenHash(payerToken),
+        email,
+        lang,
+      },
+    });
+    return { payerToken };
   }
 
   /**

@@ -91,7 +91,7 @@ const TOKENS: NearIntentsToken[] = [
     contractAddress: 'Zero1111111111111111111111111111111111111111',
     price: 0,
   },
-  // On a network the payments never settle on.
+  // On a network payment links settle on through deposit addresses.
   {
     assetId: 'nep141:usdc-eth',
     blockchain: 'eth',
@@ -177,6 +177,17 @@ describe('usdPricer', () => {
     );
   });
 
+  it('prices a link settled on any network payment links reach, by its contract', () => {
+    expect(
+      mainnet({
+        chain: 'eth',
+        asset: 'USDC',
+        issuer: '0xA0b86991c6218b36c1d19d4a2e9eb0ce3606eB48',
+      }),
+    ).toBe(1);
+    expect(mainnet({ chain: 'eth', asset: 'USDC', issuer: null })).toBe(1);
+  });
+
   it('prices nothing it would have to guess', () => {
     // Two EURC listed on Stellar.
     expect(
@@ -201,8 +212,8 @@ describe('usdPricer', () => {
         issuer: 'Zero1111111111111111111111111111111111111111',
       }),
     ).toBeNull();
-    // Not a chain payments settle on, and a chain with nothing listed.
-    expect(mainnet({ chain: 'eth', asset: 'USDC', issuer: null })).toBeNull();
+    // Not a network payments settle on, and a chain with nothing listed.
+    expect(mainnet({ chain: 'qtc', asset: 'USDC', issuer: null })).toBeNull();
     expect(
       usdPricer([], 'public')({ chain: 'stellar', asset: 'XLM', issuer: null }),
     ).toBeNull();
@@ -266,5 +277,44 @@ describe('valueRows', () => {
     expect(valueRows([], null)).toEqual({ usd: 0, unpriced: 0, priced: 0 });
     expect(formatUsd(null)).toBeNull();
     expect(formatUsd(0)).toBe('0.00');
+  });
+});
+
+describe('usdPricer on Arc, which the cross-chain route does not list', () => {
+  const ARC_USDC = '0x3600000000000000000000000000000000000000';
+
+  it('prices its presets by contract at their namesake on Ethereum, on both tiers', () => {
+    expect(
+      usdPricer(
+        TOKENS,
+        'public',
+      )({ chain: 'arc', asset: 'USDC', issuer: ARC_USDC }),
+    ).toBe(1);
+    expect(
+      usdPricer(
+        TOKENS,
+        'testnet',
+      )({ chain: 'arc', asset: 'USDC', issuer: ARC_USDC }),
+    ).toBe(1);
+  });
+
+  it('prices no other Arc token, whatever it calls itself', () => {
+    const pricer = usdPricer(TOKENS, 'public');
+    expect(
+      pricer({
+        chain: 'arc',
+        asset: 'USDC',
+        issuer: '0x754704bc059f8c67012fed69bc8a327a5aafb603',
+      }),
+    ).toBeNull();
+    expect(pricer({ chain: 'arc', asset: 'USDC', issuer: null })).toBeNull();
+    // EURC is a preset, but Ethereum's list here has none to price it by.
+    expect(
+      pricer({
+        chain: 'arc',
+        asset: 'EURC',
+        issuer: '0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1',
+      }),
+    ).toBeNull();
   });
 });

@@ -1,18 +1,146 @@
 import type { StellarNetwork } from '@/config/configuration';
-import { MONAD_CHAIN_IDS } from '@/chains/chains.constants';
+import { ARC_CHAIN_IDS, MONAD_CHAIN_IDS } from '@/chains/chains.constants';
 
-/** The EVM chains this service speaks. Monad today; one entry per chain. */
-export const EVM_CHAINS = ['monad'] as const;
+/**
+ * The EVM chains this service speaks, each a `Chain` with its own RPC, relayer
+ * and deposit addresses. One entry per chain: every table below is a `Record`
+ * over it, so a new EVM chain does not compile until each says its value.
+ */
+export const EVM_CHAINS = ['monad', 'arc'] as const;
 export type EvmChain = (typeof EVM_CHAINS)[number];
+
+export function isEvmChain(value: unknown): value is EvmChain {
+  return (
+    typeof value === 'string' &&
+    (EVM_CHAINS as readonly string[]).includes(value)
+  );
+}
 
 /** Each EVM chain's EIP-155 ids, per network tier. */
 export const EVM_CHAIN_IDS: Record<EvmChain, Record<StellarNetwork, number>> = {
   monad: MONAD_CHAIN_IDS,
+  arc: ARC_CHAIN_IDS,
 };
 
 /** Display name, for the errors a caller sees ("Monad RPC is unreachable"). */
 export const EVM_PROVIDER_NAMES: Record<EvmChain, string> = {
   monad: 'Monad',
+  arc: 'Arc',
+};
+
+/**
+ * Arc's USDC, as an ERC-20 (6 decimals). It is the chain's native coin seen
+ * through the ERC-20 interface: one balance, which the native view counts in
+ * 18 decimals and this contract truncates to 6 (`balanceOf` drops dust under
+ * a micro-USDC, so a zero there does not prove a zero native balance). Same
+ * address on mainnet and testnet (docs.arc.io, "Contract addresses";
+ * `decimals()` and `symbol()` read on both on 2026-11-18).
+ */
+export const ARC_USDC = '0x3600000000000000000000000000000000000000';
+
+/**
+ * Arc's system address that logs every native USDC movement as a standard
+ * ERC-20 `Transfer` (EIP-7708), amounts in 18 decimals. A plain value transfer
+ * logs only here; an ERC-20 `transfer` on {@link ARC_USDC} logs BOTH here (18
+ * decimals) and at the token (6), so counting both would count it twice. Seen
+ * on a testnet receipt on 2026-11-18: one transfer, 9409212000000000000 here
+ * and 9409212 at the token. Gas is deducted without a log. Stored lowercase,
+ * as nodes report a log's `address`.
+ */
+export const ARC_TRANSFER_EMITTER =
+  '0xfffffffffffffffffffffffffffffffffffffffe';
+
+/** A native coin that also answers as an ERC-20, and where its moves are logged. */
+export interface EvmNativeTokenInterface {
+  /** The ERC-20 contract over the native balance. */
+  token: string;
+  /** Its `decimals()`; the native coin keeps `NATIVE_DECIMALS`. */
+  decimals: number;
+  /**
+   * The address that logs every movement of the coin as a `Transfer`, in the
+   * native decimals, whichever interface moved it. Reading it alone counts
+   * each movement once.
+   */
+  transferEmitter: string;
+}
+
+/**
+ * Per EVM chain, its native coin's ERC-20 interface, or null where there is
+ * none (Monad's MON is only a coin). On Arc a payment link charges USDC
+ * through this interface, whether the payer's wallet sends it as the ERC-20
+ * or as a value transfer: the verifier reads the emitter's log and compares it
+ * in 6 decimals, and the deposit forwarder reads `balanceOf`.
+ */
+export const EVM_NATIVE_TOKEN_INTERFACES: Record<
+  EvmChain,
+  EvmNativeTokenInterface | null
+> = {
+  monad: null,
+  arc: { token: ARC_USDC, decimals: 6, transferEmitter: ARC_TRANSFER_EMITTER },
+};
+
+/** A token a request may name by its code alone, without `assetIssuer`. */
+export interface EvmTokenPreset {
+  /** EIP-55. */
+  address: string;
+  decimals: number;
+}
+
+/**
+ * Tokens a payment link may name by code alone, per chain and tier. Any other
+ * ERC-20 is still accepted by its contract (`assetIssuer`), its `decimals()`
+ * read on-chain. Arc's: USDC and EURC (docs.arc.io, "Contract addresses";
+ * `decimals()` 6 and `symbol()` read on mainnet and testnet on 2026-11-18).
+ */
+export const EVM_TOKEN_PRESETS: Record<
+  EvmChain,
+  Record<StellarNetwork, Readonly<Record<string, EvmTokenPreset>>>
+> = {
+  monad: { public: {}, testnet: {} },
+  arc: {
+    public: {
+      USDC: { address: ARC_USDC, decimals: 6 },
+      EURC: {
+        address: '0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1',
+        decimals: 6,
+      },
+    },
+    testnet: {
+      USDC: { address: ARC_USDC, decimals: 6 },
+      EURC: {
+        address: '0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a',
+        decimals: 6,
+      },
+    },
+  },
+};
+
+/**
+ * The lowest `maxFeePerGas` a chain's mempool keeps, in wei. Arc drops a
+ * transaction under 20 gwei silently, with no error and no receipt
+ * (docs.arc.io, "EVM compatibility"; its base fee sat at that floor on both
+ * tiers on 2026-11-18), so the relayer never bids under it.
+ */
+export const EVM_MIN_MAX_FEE_PER_GAS: Record<EvmChain, bigint> = {
+  monad: 0n,
+  arc: 20_000_000_000n,
+};
+
+/**
+ * Whether a chain's payment links may pay the merchant DIRECTLY when no relayer
+ * key is configured (an EIP-681 link to the merchant's own address, recognised
+ * by destination, token and exact amount). Monad keeps that mode as it always
+ * had it. Arc never takes it: such a payment carries nothing that is the
+ * intent's own, so one customer's transfer could settle another (older) intent
+ * for the same amount, and any tenant could create intents at a merchant's
+ * address and price to take its payments first come. On Arc a link exists only
+ * with deposit addresses (`ARC_RELAYER_PRIVATE_KEY`), each one an address no
+ * other intent holds; without them Arc links are refused and the networks
+ * catalog reports Arc unavailable.
+ */
+export const EVM_DIRECT_PAY_LINKS: Record<EvmChain, boolean> = {
+  monad: true,
+  arc: false,
 };
 
 /** `keccak256("Transfer(address,address,uint256)")` — the ERC-20 transfer log. */
@@ -32,7 +160,8 @@ export const EIP681_SCHEME = 'ethereum:';
  * `eth_getLogs` calls one observer tick may spend on one intent. With the
  * public RPC's 100-block cap and Monad's ~0.4 s blocks that is ~200 s of chain
  * per tick: enough to keep up at the default 15 s interval and to catch up a
- * backlog over a few ticks without letting one intent own the sweep.
+ * backlog over a few ticks without letting one intent own the sweep. On Arc
+ * (~0.5 s blocks, 5,000 blocks a call by default) it is hours of chain.
  */
 export const EVM_LOG_SCAN_MAX_CALLS = 5;
 
@@ -41,6 +170,9 @@ export const EVM_LOG_SCAN_MAX_CALLS = 5;
  * follows a 32-byte salt in its calldata. Deployed at this same address on
  * nearly every EVM chain, Monad mainnet and testnet included (checked with
  * `eth_getCode`), which is why deposit addresses need no factory of our own.
+ * Arc too, on both tiers: `eth_getCode` answers the proxy's runtime, and a
+ * creation `eth_call` through it answered the address `depositAddress`
+ * computes (2026-11-18).
  */
 export const DETERMINISTIC_DEPLOYER =
   '0x4e59b44847b379578588920ca78fbf26c0b4956c';
@@ -57,7 +189,9 @@ export const ERC20_BALANCE_OF_SELECTOR = '0x70a08231';
  * Measured on Monad testnet with `eth_estimateGas` through the proxy: 367k
  * with nothing to forward, 418k forwarding native MON (state override giving
  * the address a balance). The token path adds a `balanceOf` and two token
- * transfers.
+ * transfers. On Arc, mainnet and testnet alike (2026-11-18, same method):
+ * 451k forwarding USDC through its ERC-20 interface (dust under a micro-USDC
+ * included, sent on as native coin), 501k with a merchant fee, 411k native.
  */
 export const FORWARDER_GAS_NATIVE = 450_000n;
 export const FORWARDER_GAS_TOKEN = 520_000n;

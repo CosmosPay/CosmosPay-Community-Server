@@ -19,7 +19,10 @@ import {
   DEPOSIT_FORWARD_RESEND_MS,
   DEPOSIT_WATCH_WINDOW_MS,
   DETERMINISTIC_DEPLOYER,
+  EVM_CHAINS,
+  EVM_PROVIDER_NAMES,
   type EvmChain,
+  isEvmChain,
 } from '@/evm/evm.constants';
 import {
   deployCalldata,
@@ -40,26 +43,30 @@ type WatchedDeposit = EvmDepositAddress & {
 const CLOSED = new Set(['SUCCEEDED', 'FAILED', 'CANCELLED', 'EXPIRED']);
 
 /**
- * Moves money from Monad deposit addresses to merchants, and settles the
- * intents it paid.
+ * Moves money from EVM deposit addresses (Monad, Arc) to merchants, and
+ * settles the intents it paid. One job for every EVM chain with a relayer key:
+ * each row names its chain, and the chain's relayer sends its forward.
  *
  * Each tick, for every deposit address still being watched:
  *
- *   - **AWAITING** — read the balance (native MON, or the intent's token). Once
+ *   - **AWAITING**: read the balance (the native coin, or the intent's token:
+ *     on Arc, USDC through its ERC-20 interface, which also counts what a
+ *     payer sent as a native transfer). Once
  *     it covers the intent's amount (any amount above the fee, for an open
  *     one), send the forward: the forwarder's deployment through the
  *     deterministic proxy, or `flush` / `flushToken` when it is already
  *     deployed. An intent that has closed without being paid in full — expired,
  *     cancelled — still has whatever arrived forwarded: it is the merchant's
  *     money either way, and it is not this service's to hold.
- *   - **FORWARDING** — look for the receipt. Success: FORWARDED, and the intent
+ *   - **FORWARDING**: look for the receipt. Success: FORWARDED, and the intent
  *     settles on that transaction if what was forwarded covered it. Reverted,
  *     or no receipt after {@link DEPOSIT_FORWARD_RESEND_MS}: back to AWAITING,
  *     and the next tick tries again — re-sending is safe, since the address can
  *     only be deployed once and the retry checks for code first.
- *   - **FORWARDED** with a token — a late token payment would otherwise sit at
+ *   - **FORWARDED** with a token: a late token payment would otherwise sit at
  *     a deployed forwarder, which only forwards native coin by itself; it is
- *     flushed the same way.
+ *     flushed the same way. A deployed forwarder is flushed only for a balance
+ *     worth the relayer's gas (`flushJustified`), never for dust.
  *
  * Settling on the FORWARD rather than on the payer's transaction is
  * deliberate: a balance has no transaction hash to prove it, and the forward is
@@ -74,7 +81,6 @@ const CLOSED = new Set(['SUCCEEDED', 'FAILED', 'CANCELLED', 'EXPIRED']);
 export class EvmDepositForwarderService extends ScheduledJob {
   protected readonly logger = new Logger(EvmDepositForwarderService.name);
   protected readonly lockKey = AdvisoryLockKey.EvmDepositForwarder;
-  private readonly chain: EvmChain = 'monad';
 
   constructor(
     private readonly config: ConfigService<AppConfig, true>,
@@ -87,18 +93,26 @@ export class EvmDepositForwarderService extends ScheduledJob {
     super(locks);
   }
 
+  /** The EVM chains whose relayer key is configured. */
+  private relayedChains(): EvmChain[] {
+    return EVM_CHAINS.filter((chain) => this.relayer.isEnabled(chain));
+  }
+
   /** On with the observer, and only where a relayer key is configured. */
   protected schedule(): JobSchedule {
     const { enabled, intervalMs } = this.config.get('observer', {
       infer: true,
     });
-    const relayer = this.relayer.isEnabled(this.chain);
+    const chains = this.relayedChains();
     return {
-      enabled: enabled && relayer,
+      enabled: enabled && chains.length > 0,
       intervalMs,
-      description: relayer
-        ? 'Monad deposit forwarder'
-        : 'Monad deposit forwarder (no MONAD_RELAYER_PRIVATE_KEY)',
+      description:
+        chains.length > 0
+          ? `EVM deposit forwarder (${chains
+              .map((chain) => EVM_PROVIDER_NAMES[chain])
+              .join(', ')})`
+          : 'EVM deposit forwarder (no MONAD_RELAYER_PRIVATE_KEY or ARC_RELAYER_PRIVATE_KEY)',
     };
   }
 
@@ -106,6 +120,9 @@ export class EvmDepositForwarderService extends ScheduledJob {
     const since = new Date(Date.now() - DEPOSIT_WATCH_WINDOW_MS);
     const rows = await this.prisma.evmDepositAddress.findMany({
       where: {
+        // A chain whose relayer key was removed keeps its rows: they wait, and
+        // move again once the key is back.
+        chain: { in: this.relayedChains() },
         createdAt: { gte: since },
         OR: [
           { status: { in: ['AWAITING', 'FORWARDING'] } },
@@ -137,24 +154,23 @@ export class EvmDepositForwarderService extends ScheduledJob {
 
   /** Sends the forward once the balance covers the intent (or it has closed). */
   async forwardIfFunded(row: WatchedDeposit): Promise<void> {
+    const chain = chainOf(row);
     const network = row.network as StellarNetwork;
     const balance = row.token
-      ? await this.rpc.erc20BalanceOf(
-          this.chain,
-          network,
-          row.token,
-          row.address,
-        )
-      : await this.rpc.getBalance(this.chain, network, row.address);
+      ? await this.rpc.erc20BalanceOf(chain, network, row.token, row.address)
+      : await this.rpc.getBalance(chain, network, row.address);
     if (balance === 0n) return;
 
     const fee = BigInt(row.fee);
     const merchantFee = row.merchantFee ? BigInt(row.merchantFee) : 0n;
-    const deployed = await this.rpc.hasCode(this.chain, network, row.address);
+    const deployed = await this.rpc.hasCode(chain, network, row.address);
     // Before deployment the fees come out of the balance (the relayer's, and a
     // merchant fee), so a balance that does not exceed them would forward
     // nothing to the merchant. Wait for more.
     if (!deployed && balance <= fee + merchantFee) return;
+    // After it, a flush pays the relayer nothing: only a balance worth its gas
+    // is flushed, so dust sent to a forwarder cannot make the relayer burn gas.
+    if (deployed && !flushJustified(row, balance)) return;
 
     if (row.status === 'AWAITING' && !this.shouldForward(row, balance)) return;
 
@@ -193,7 +209,7 @@ export class EvmDepositForwarderService extends ScheduledJob {
         data: deployCalldata(row.salt, initCode),
       };
     }
-    const hash = await this.relayer.send(this.chain, network, call);
+    const hash = await this.relayer.send(chain, network, call);
     await this.prisma.evmDepositAddress.update({
       where: { id: row.id },
       data: {
@@ -229,7 +245,7 @@ export class EvmDepositForwarderService extends ScheduledJob {
   async confirm(row: WatchedDeposit): Promise<void> {
     const network = row.network as StellarNetwork;
     const receipt = row.forwardTxHash
-      ? await this.rpc.getReceipt(this.chain, network, row.forwardTxHash)
+      ? await this.rpc.getReceipt(chainOf(row), network, row.forwardTxHash)
       : null;
 
     if (!receipt) {
@@ -292,8 +308,46 @@ export class EvmDepositForwarderService extends ScheduledJob {
       row.forwardTxHash,
       undefined,
       'observer',
+      // No chain time: the payer's deposit into the address was public before
+      // the sweep, and its own time is not read here, so `paidOnChainAt` stays
+      // null and no checkout proof counts for the receipt (fail closed).
+      undefined,
     );
   }
+}
+
+/**
+ * A deposit row's chain. Rows are written only for EVM chains; anything else
+ * is a data error, and forwarding it through another chain's relayer would be
+ * worse than stopping.
+ */
+function chainOf(row: Pick<EvmDepositAddress, 'chain' | 'address'>): EvmChain {
+  if (!isEvmChain(row.chain)) {
+    throw new Error(
+      `Deposit ${row.address} is on unknown chain "${row.chain}"`,
+    );
+  }
+  return row.chain;
+}
+
+/**
+ * Whether a DEPLOYED forwarder's balance is worth a flush. A flush pays the
+ * relayer nothing (its fee was the deployment's), so each one is gas the
+ * relayer gives away, and anyone can send a forwarder dust for the price of a
+ * transfer, on Monad and Arc alike. The floor is the row's own `fee`: the price
+ * this service put on one forward in the deposit's asset when it minted the
+ * address (from the gas price, or `<CHAIN>_DEPOSIT_TOKEN_FEES`), and a flush
+ * costs less gas than that deployment. A deposit in an asset with no price (a
+ * token with no configured fee: `fee` 0) is flushed only for a whole payment,
+ * the intent's amount, and never for an open-amount intent. A balance under the
+ * floor is not lost: `flush` / `flushToken` are open to anyone and can only pay
+ * the merchant.
+ */
+function flushJustified(row: WatchedDeposit, balance: bigint): boolean {
+  const fee = BigInt(row.fee);
+  if (fee > 0n) return balance > fee;
+  const expected = row.intent ? expectedAmount(row.intent) : null;
+  return expected !== null && balance >= expected;
 }
 
 /**
@@ -303,9 +357,12 @@ export class EvmDepositForwarderService extends ScheduledJob {
  */
 function expectedAmount(intent: PaymentIntent): bigint | null {
   if (intent.amount === null) return null;
-  const decimals = intent.assetIssuer
-    ? (intent.assetDecimals ?? NATIVE_DECIMALS.monad)
+  const native = isEvmChain(intent.chain)
+    ? NATIVE_DECIMALS[intent.chain]
     : NATIVE_DECIMALS.monad;
+  const decimals = intent.assetIssuer
+    ? (intent.assetDecimals ?? native)
+    : native;
   const amount = parseUnits(intent.amount, decimals);
   const fee = readMerchantFeeRecord(intent.merchantFee);
   return fee?.paidBy === 'payer'

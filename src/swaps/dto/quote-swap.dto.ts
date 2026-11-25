@@ -9,7 +9,7 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
-import { CHAINS, type Chain } from '@/chains/chains.constants';
+import { SWAP_CHAINS, type SwapChain } from '@/chains/chains.constants';
 import { MerchantFeeDto } from '@/common/merchant-fee/merchant-fee.dto';
 import { IsDecimalAmount } from '@/common/validators/is-decimal-amount.validator';
 import { IsStellarAddress } from '@/common/validators/is-stellar-address.validator';
@@ -33,16 +33,16 @@ import { IsSwapAsset } from '@/common/validators/is-swap-asset.validator';
 })
 export class QuoteSwapDto {
   @ApiPropertyOptional({
-    enum: CHAINS,
+    enum: SWAP_CHAINS,
     default: 'stellar',
     description:
       'The chain to swap on. Omitted means Stellar. solana → the Solana swap route, ' +
-      'monad → the Monad swap route; both mainnet only. Swaps between chains are ' +
-      '/v1/cross-chain-swaps.',
+      'monad → the Monad swap route; both mainnet only. Arc has no swap route ' +
+      'and is refused. Swaps between chains are /v1/cross-chain-swaps.',
   })
   @IsOptional()
-  @IsIn(CHAINS)
-  chain?: Chain;
+  @IsIn(SWAP_CHAINS)
+  chain?: SwapChain;
 
   @ApiPropertyOptional({
     description:

@@ -21,12 +21,70 @@ export interface UpstreamRequest {
   headers?: Record<string, string>;
   body?: unknown;
   timeoutMs: number;
+  /**
+   * Throw {@link UpstreamUnauthorized} on a 401 instead of `misconfigured`:
+   * for a client whose bearer token expires, which signs in again once
+   * before it calls the key wrong.
+   */
+  unauthorizedIsRetryable?: boolean;
+  /**
+   * Applied to the provider's own text before it is logged or relayed: for a
+   * provider that may echo personal data it was sent (a tax id) in an error.
+   */
+  redact?: (text: string) => string;
+  /**
+   * The request or its answer carries a person's data (an email, a name, a
+   * bank account, a bearer token of theirs). A failure is then logged by the
+   * body's KEY NAMES and its error code alone, never its text, and every
+   * status that is not 2xx (404 and 401 included) is thrown as an
+   * {@link UpstreamStatusError} for the caller to map onto its own codes:
+   * the default mapping relays the provider's reason, which may echo what it
+   * was sent.
+   */
+  personalData?: boolean;
+}
+
+/** A provider's error code worth logging: a plain upper-case word (`INVALID_OTP`), never free text. */
+const ERROR_CODE_RE = /^[A-Z][A-Z0-9_]{0,63}$/;
+
+/**
+ * The provider answered a status a {@link UpstreamRequest.personalData}
+ * request maps itself. It carries the status, the provider's error code when
+ * that is a plain word, and the body's top-level key names; its message names
+ * nothing else. The provider's text is held privately: {@link mentions} can
+ * ask it about a word, and nothing logs or relays it.
+ */
+export class UpstreamStatusError extends Error {
+  readonly #text: string;
+
+  constructor(
+    readonly provider: string,
+    readonly status: number,
+    readonly code: string | null,
+    readonly keys: readonly string[],
+    text: string,
+  ) {
+    super(`${provider} answered ${status}${code ? ` (${code})` : ''}`);
+    this.#text = text;
+  }
+
+  /** Whether the provider's own text mentions `word`, in any case. */
+  mentions(word: string): boolean {
+    return this.#text.toLowerCase().includes(word.toLowerCase());
+  }
 }
 
 /** The provider answered 404. Only some callers give that a meaning. */
 export class UpstreamNotFound extends Error {
   constructor(readonly provider: string) {
     super(`Not found at ${provider}`);
+  }
+}
+
+/** The provider answered 401 to a request that asked to hear it ({@link UpstreamRequest.unauthorizedIsRetryable}). */
+export class UpstreamUnauthorized extends Error {
+  constructor(readonly provider: string) {
+    super(`Unauthorized at ${provider}`);
   }
 }
 
@@ -44,6 +102,10 @@ export class UpstreamNotFound extends Error {
  *   - **404**: {@link UpstreamNotFound}, for the caller to interpret;
  *   - **429**: 503 `provider_unavailable`; **5xx**: 502 `provider_error`;
  *   - a timeout is a 504, a dead socket a 502, both `provider_unavailable`.
+ *
+ * A {@link UpstreamRequest.personalData} request keeps the timeout and socket
+ * mapping, but every other failure is an {@link UpstreamStatusError} logged by
+ * key names only.
  */
 export async function requestUpstreamJson<T>(
   req: UpstreamRequest,
@@ -69,11 +131,29 @@ export async function requestUpstreamJson<T>(
     const payload = safeJsonParse(text);
     if (res.ok) return payload as T;
 
-    const message = upstreamMessage(payload);
-    logger.warn(`${label} -> ${res.status}: ${message ?? text.slice(0, 200)}`);
+    if (req.personalData) {
+      const code = errorCodeOf(payload);
+      const keys = keysOf(payload);
+      logger.warn(
+        `${label} -> ${res.status}: ${code ?? 'no error code'} (keys: ${keys.join(', ') || 'none'})`,
+      );
+      throw new UpstreamStatusError(req.provider, res.status, code, keys, text);
+    }
+
+    const redact = req.redact ?? ((line: string) => line);
+    const raw = upstreamMessage(payload);
+    const message = raw === null ? null : redact(raw);
+    logger.warn(
+      `${label} -> ${res.status}: ${message ?? redact(text.slice(0, 200))}`,
+    );
     throw statusError(req, res.status, message);
   } catch (err) {
-    if (err instanceof HttpException || err instanceof UpstreamNotFound) {
+    if (
+      err instanceof HttpException ||
+      err instanceof UpstreamNotFound ||
+      err instanceof UpstreamUnauthorized ||
+      err instanceof UpstreamStatusError
+    ) {
       throw err;
     }
     if (err instanceof Error && err.name === 'AbortError') {
@@ -102,6 +182,9 @@ function statusError(
   message: string | null,
 ): Error {
   if (status === 404) return new UpstreamNotFound(req.provider);
+  if (status === 401 && req.unauthorizedIsRetryable) {
+    return new UpstreamUnauthorized(req.provider);
+  }
   if (status === 400 || status === 422) {
     return ApiError.badRequest(
       ApiErrorCode.ProviderError,
@@ -137,6 +220,28 @@ function safeJsonParse(text: string): unknown {
 }
 
 const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+/** The provider's own error code (`errorCode`, else `code`) when it is a plain upper-case word. */
+function errorCodeOf(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return null;
+  }
+  const obj = payload as Record<string, unknown>;
+  const code = [obj.errorCode, obj.code].find(
+    (v): v is string => typeof v === 'string' && ERROR_CODE_RE.test(v),
+  );
+  return code ?? null;
+}
+
+/** The top-level key names of a JSON object body (at most 20, each a plain word), else none. */
+function keysOf(payload: unknown): string[] {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return [];
+  }
+  return Object.keys(payload)
+    .filter((key) => /^[A-Za-z0-9_$-]{1,64}$/.test(key))
+    .slice(0, 20);
+}
 
 /** The provider's own reason (`message`, else `error`), one line, bounded, scrubbed of its names. */
 function upstreamMessage(payload: unknown): string | null {

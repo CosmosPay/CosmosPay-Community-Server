@@ -22,6 +22,13 @@ process.env.REQUEST_LOG_RETENTION_DAYS = '0';
 process.env.NEAR_INTENTS_TOKENS_PREFETCH = 'false';
 // No analytics cache: the suites call the same figure several times with different rows.
 process.env.ANALYTICS_CACHE_TTL_MS = '0';
+// A fixture sandbox (public throwaway values, never funded): the networks route
+// then answers the same on every machine, whatever the developer .env holds. No
+// test-network RPC is reached: the observer is off (OBSERVER_ENABLED above).
+process.env.SANDBOX_DEPOSIT_SEED = '5e'.repeat(32);
+process.env.SANDBOX_TREASURY_PRIVATE_KEY = `0x${'5f'.repeat(32)}`;
+process.env.SANDBOX_RPC_URLS = '';
+process.env.SANDBOX_CUSD_ADDRESSES = '';
 // ConfigModule still runs dotenv against the repo's .env, and dotenv does not
 // overwrite values already in process.env — so a developer whose .env carries a
 // real BLINDPAY_API_KEY would otherwise trip env validation ("BLINDPAY_
@@ -54,7 +61,7 @@ process.env.WALLET_AUTH_SESSION_SECRET =
 // through the real loader, signature check and registry. Pinned for the same
 // reason as the rest: a developer's .env may enable others, or none.
 process.env.PLUGINS_ENABLED =
-  'example,blindpay,defindex,eldorado,trustless-work';
+  'example,blindpay,defindex,eldorado,koywe,trustless-work';
 // No DeFindex key: the guards suite asserts `503 misconfigured`, and a developer's
 // .env usually carries a real key, which would send the suites to DeFindex. The
 // binding suite replaces DefindexClient instead. Empty rather than deleted, for
@@ -75,6 +82,11 @@ for (const network of ['TESTNET', 'MAINNET']) {
     process.env[`TRUSTLESS_WORK_${name}_${network}`] = '';
   }
 }
+// No P2P direct flow unless a suite turns it on: a developer's .env may carry the
+// API referral id and the session secret. Empty rather than deleted, for the same
+// dotenv reason as above.
+process.env.ELDORADO_API_REFERRAL_ID = '';
+process.env.P2P_DIRECT_SESSION_SECRET = '';
 process.env.PLUGINS_TRUSTED_KEYS = '';
 process.env.PLUGINS_ALLOW_UNSIGNED = 'false';
 // The shared public key GET /v1/public-key serves. Dev only, so the suite can see
@@ -122,3 +134,30 @@ for (const suffix of [
 ]) {
   process.env[`ZK_PAYMENTS_MAINNET_${suffix}`] = '';
 }
+// Bank transfers (native plugin `koywe`): a fixture sandbox environment and no
+// production one, so the suites reach only the sandbox host they answer
+// themselves. Every variable pinned, empty rather than deleted, for the same
+// dotenv reason as above.
+process.env.KOYWE_API_URL = 'https://api.koywe.example';
+process.env.KOYWE_API_KEY = '';
+process.env.KOYWE_SECRET = '';
+process.env.KOYWE_ORGANIZATION_ID = '';
+process.env.KOYWE_MERCHANT_ID = '';
+process.env.KOYWE_WEBHOOK_SECRET = '';
+process.env.KOYWE_SANDBOX_API_URL = 'https://api-sandbox.koywe.example';
+process.env.KOYWE_SANDBOX_API_KEY = 'e2e-sandbox-key';
+process.env.KOYWE_SANDBOX_SECRET = 'e2e-sandbox-secret';
+process.env.KOYWE_SANDBOX_ORGANIZATION_ID = 'org_e2e';
+process.env.KOYWE_SANDBOX_MERCHANT_ID = '';
+process.env.KOYWE_SANDBOX_WEBHOOK_SECRET =
+  'e2e-sandbox-webhook-secret-e2e-sandbox-webhook-secret';
+process.env.KOYWE_SANDBOX_NETWORK = 'POLYGON';
+process.env.KOYWE_SANDBOX_TOKEN = 'USDT';
+process.env.KOYWE_POOLED_ENABLED = 'false';
+process.env.KOYWE_DOCUMENT_PEPPER =
+  'e2e-document-pepper-e2e-document-pepper-e2e';
+process.env.KOYWE_ACCOUNT_HOLDER = '';
+process.env.KOYWE_ALIAS = '';
+process.env.KOYWE_CVU = '';
+process.env.KOYWE_MIN_ARS = '1000';
+process.env.KOYWE_MAX_ARS = '5000000';
