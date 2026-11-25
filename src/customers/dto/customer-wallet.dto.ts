@@ -22,7 +22,7 @@ export class CustomerWalletDto {
     example: '7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV',
     description:
       'The address on that chain: a Stellar account (G..., checksum verified), a Solana address ' +
-      '(base58, 32 bytes) or a Monad address (0x + 40 hex, any case; stored EIP-55 checksummed). ' +
+      '(base58, 32 bytes) or a Monad or Arc address (0x + 40 hex, any case; stored EIP-55 checksummed). ' +
       'Payment intents whose payer (`source`) is this address count toward the customer.',
   })
   @IsChainAddress('chain')

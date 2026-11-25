@@ -363,9 +363,9 @@ export class WalletAuthController {
       'signed over those raw UTF-8 bytes with the account key, base64. The ' +
       'first line is one no Stellar transaction envelope can begin with, which ' +
       'is what makes signing it safe.\n\n' +
-      'On Solana and Monad (`chain`), a `chain: {chain}` line follows the ' +
+      'On Solana, Monad and Arc (`chain`), a `chain: {chain}` line follows the ' +
       'first one. Solana signs the bytes with ed25519 (`signMessage`; base64 ' +
-      'or base58); Monad with EIP-191 `personal_sign` (0x-hex).',
+      'or base58); Monad and Arc with EIP-191 `personal_sign` (0x-hex).',
   })
   @ApiHeader({
     name: 'X-Wallet-Session',
@@ -426,7 +426,7 @@ export class WalletBackupController {
       'box: {sha256 hex of box}\n' +
       'at: {signedAt}\n' +
       '```\n\n' +
-      'On Solana and Monad a `chain: {chain}` line follows the first one, and ' +
+      'On Solana, Monad and Arc a `chain: {chain}` line follows the first one, and ' +
       'the bytes are signed as for sign-in.',
   })
   @ApiOkResponse({ type: WalletBackupUpdatedEntity })

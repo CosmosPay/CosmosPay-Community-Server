@@ -136,7 +136,8 @@ export class AliasesController {
       'The active aliases holding this address, oldest first, each with its ' +
       '`chain`, `network` and whether the address is its primary there, as ' +
       '`{ data }` (not paged). Without `chain` the chain is read off the ' +
-      "address's own shape, and a Monad address matches whatever its letter " +
+      "address's own shape (a 0x address is read as Monad: name `chain: arc` " +
+      'for Arc), and an EVM address matches whatever its letter ' +
       'case. An address no chain accepts answers an empty `data`, not an error.',
   })
   @ApiOkResponse({ type: AliasByAddressEntity })

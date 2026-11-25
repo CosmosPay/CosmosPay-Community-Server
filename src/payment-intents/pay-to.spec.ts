@@ -165,3 +165,15 @@ describe('PAY_TO', () => {
     });
   });
 });
+
+describe('PAY_TO on Arc', () => {
+  const DEST = '0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed';
+  const DEPOSIT = '0xC830d264C14ebDB31cdEa0Fb6f83C5b0D8EEc52F';
+
+  it('is the deposit address with a relayer, else the merchant, as on Monad', () => {
+    expect(PAY_TO.arc({ destination: DEST, chainReference: DEPOSIT })).toBe(
+      DEPOSIT,
+    );
+    expect(PAY_TO.arc({ destination: DEST, chainReference: null })).toBe(DEST);
+  });
+});

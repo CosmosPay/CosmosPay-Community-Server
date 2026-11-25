@@ -83,3 +83,57 @@ describe('EvmRpcClient', () => {
     expect(err!.code).toBe(ApiErrorCode.ProviderError);
   });
 });
+
+describe('EvmRpcClient on Arc', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  const arcConfig = {
+    get: (key: string) =>
+      key === 'arc'
+        ? {
+            rpcUrls: {
+              public: 'https://rpc.mainnet.arc.io',
+              testnet: 'https://rpc.testnet.arc.io',
+            },
+            timeoutMs: 1000,
+            logBlockRange: 5_000,
+          }
+        : null,
+  } as never;
+
+  it('knows Arc’s hard-coded chain ids', () => {
+    const client = new EvmRpcClient(arcConfig);
+    expect(client.chainId('arc', 'public')).toBe(5042);
+    expect(client.chainId('arc', 'testnet')).toBe(5042002);
+    expect(client.logBlockRange('arc')).toBe(5_000);
+  });
+
+  it('trusts a node that answers Arc Testnet’s id (0x4cef52) on the testnet tier, at its own URL', async () => {
+    const fetch = node({ eth_chainId: '0x4cef52', eth_blockNumber: '0x10' });
+    await expect(
+      new EvmRpcClient(arcConfig).blockNumber('arc', 'testnet'),
+    ).resolves.toBe(16n);
+    expect(fetch.mock.calls[0][0]).toBe('https://rpc.testnet.arc.io');
+  });
+
+  it('refuses Arc Testnet configured as mainnet, naming ARC_RPC_URL_MAINNET', async () => {
+    node({ eth_chainId: '0x4cef52', eth_blockNumber: '0x10' });
+    const err = await new EvmRpcClient(arcConfig)
+      .blockNumber('arc', 'public')
+      .then(() => null)
+      .catch((e: unknown) => e as ApiError);
+    expect(err!.code).toBe(ApiErrorCode.Misconfigured);
+    expect(err!.message).toMatch(/Arc RPC/);
+    expect(err!.message).toMatch(/serves chain 5042002, not 5042/);
+    expect(err!.message).toMatch(/ARC_RPC_URL_MAINNET/);
+  });
+
+  it('refuses a Monad node configured for Arc', async () => {
+    node({ eth_chainId: '0x8f', eth_blockNumber: '0x10' });
+    const err = await new EvmRpcClient(arcConfig)
+      .blockNumber('arc', 'public')
+      .then(() => null)
+      .catch((e: unknown) => e as ApiError);
+    expect(err!.code).toBe(ApiErrorCode.Misconfigured);
+  });
+});

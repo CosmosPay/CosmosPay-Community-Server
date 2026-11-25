@@ -18,7 +18,8 @@ export class AliasAddressEntity {
   })
   chain!: string;
   @ApiProperty({
-    description: 'On `chain`: Stellar G…, Solana base58, Monad 0x… (EIP-55).',
+    description:
+      'On `chain`: Stellar G…, Solana base58, Monad and Arc 0x… (EIP-55).',
   })
   address!: string;
   @ApiProperty({
@@ -120,7 +121,7 @@ export class AliasChallengeEntity {
   @ApiProperty({
     description:
       'The EXACT string to sign: digested first on Stellar, signed as text on ' +
-      'Solana and Monad. Returned rather than described so a client never ' +
+      'Solana, Monad and Arc. Returned rather than described so a client never ' +
       'rebuilds it from prose. A client that assembles the fields itself is ' +
       'one field-order change away from producing signatures nothing accepts.',
   })

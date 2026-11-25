@@ -102,13 +102,13 @@ describe('SandboxDepositRoute', () => {
 
   it('keeps the other networks off, with the reason', () => {
     const route = build();
-    for (const id of ['btc', 'tron', 'abs', 'hypercore'] as const) {
+    for (const id of ['btc', 'tron', 'abs', 'hypercore', 'arc'] as const) {
       const a = route.availability(id);
       expect(a.available).toBe(false);
       expect(a.reason).toBeTruthy();
       expect(a.reason).not.toMatch(/near intents|1click/i);
     }
-    expect(route.catalog()).toHaveLength(35);
+    expect(route.catalog()).toHaveLength(36);
   });
 
   it('settles nothing on Scroll, whose test network was shut down, even with cUSD configured', () => {

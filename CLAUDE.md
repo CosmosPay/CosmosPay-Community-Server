@@ -278,7 +278,7 @@ table. These are the rules that did not hold on their own:
 
 ## Chains and native plugins
 
-- **Stellar, Solana and Monad are one `Chain` union** (`@/chains/chains.constants`).
+- **Stellar, Solana, Monad and Arc are one `Chain` union** (`@/chains/chains.constants`).
   Anything per chain — address rules, transaction-id shapes, payment verifiers,
   message signatures, analytics labels — is a `Record<Chain, …>`, so a new chain
   does not compile until every table has its entry. A request that names no chain
@@ -287,13 +287,23 @@ table. These are the rules that did not hold on their own:
   A field that names no chain but takes any (a customer's `account`) reads the
   chain from the shape: `@IsAnyChainAddress()` to validate, `normalizeAnyChainAddress`
   to store (EIP-55 on Monad, the spelling payment intents record a payer in).
+  Arc's addresses have Monad's shape, so such a field reads a `0x` address as Monad,
+  as it did before Arc existed (`SHAPE_CHAINS` in `chain-address.ts`): an Arc wallet
+  is one a request names with `chain: arc`.
+- **Not every chain is in every table.** `SWAP_CHAINS` (Stellar, Solana, Monad) have a
+  swap venue; `RouteChain` (`Extract<Chain, CrossChainNetworkId>`, the same three) are
+  the chains the cross-chain route reaches. Arc is in neither: a table of swap venues
+  is a `Record<SwapVenueChain, …>` and a table of how the route names or pays a chain
+  is a `Record<RouteChain, …>`, so adding a chain to `CHAINS` alone does not force a
+  venue or a route on it. A feature off a chain refuses it in validation (its DTO enum
+  is `SWAP_CHAINS` or `CROSS_CHAIN_NETWORK_IDS`), never by falling through to Monad.
 - **A customer holds wallets** (`customer_wallet`, product owner 2026-10-27: one customer pays from
   several wallets on different chains). A wallet belongs to one customer of a merchant: the
   unique index is `(consumerId, chain, address)`, so a payment's payer counts toward exactly one
   customer and the payer recorded on settlement (`ensureForPayer`) is looked up by chain and
   address. `account` is the deprecated first wallet: answered from `wallets`, and on `PATCH` it
   edits that wallet only. Wallets change through their own routes, never through `PATCH`.
-- **Solana and Monad are reached only through `SolanaRpcClient` / `EvmRpcClient`**,
+- **Solana, Monad and Arc are reached only through `SolanaRpcClient` / `EvmRpcClient`**,
   which check the node's genesis hash / `eth_chainId` before trusting it. Never
   call a node URL directly. Stellar mainnet's Soroban RPC is the same rule:
   `SorobanRpcClient` (`src/stellar/soroban-rpc.client.ts`, `STELLAR_RPC_URL_MAINNET`)
@@ -341,17 +351,19 @@ table. These are the rules that did not hold on their own:
 - **Swap venues are the exception, by decision: they are core.** A same-chain
   swap is `/v1/swaps` on the chain's own venue — the Stellar DEX, Jupiter on
   Solana, Kuru Flow on Monad (`src/jupiter/`, `src/kuru/`). The Stellar DEX stays
-  in `swaps.service.ts`; every OTHER chain is one `ChainSwapVenue` in
-  `src/swaps/venues/`, held as `Record<OtherChain, ChainSwapVenue>` in
-  `chain-swaps.service.ts` (`OtherChain = Exclude<Chain, 'stellar'>`), so a new
-  chain does not compile until it has a venue. A swap between chains is
+  in `swaps.service.ts`; every OTHER swap chain is one `ChainSwapVenue` in
+  `src/swaps/venues/`, held as `Record<SwapVenueChain, ChainSwapVenue>` in
+  `chain-swaps.service.ts` (`SwapVenueChain = Exclude<SwapChain, 'stellar'>`), so a
+  chain added to `SWAP_CHAINS` does not compile until it has a venue (Arc has none,
+  and is not in `SWAP_CHAINS`). A swap between chains is
   `/v1/cross-chain-swaps` on NEAR Intents (`src/near-intents/`), which refuses
   a same-chain pair on Stellar, Solana and Monad (they have a venue above) and
   allows it on every other network. All of them are always compiled in, not
   plugins. Each aggregator only prices and builds: the wallet signs, and this
   service checks the signed transaction is the one it built before broadcasting
-  it through its own RPC. Anything per chain is a `Record<Chain, …>`
-  (`NEAR_INTENTS_BLOCKCHAINS`, `DEPOSIT_LINK_BUILDERS`, `CHAIN_SWAP_PROVIDERS`),
+  it through its own RPC. Anything per chain is a `Record` over the chains it
+  applies to (`NEAR_INTENTS_BLOCKCHAINS` and `DEPOSIT_LINK_BUILDERS` over `RouteChain`,
+  `CHAIN_SWAP_PROVIDERS` over `SwapVenueChain`),
   deposit links use this service's own SEP-7 / Solana Pay / EIP-681 builders, and
   third-party HTTP goes through `requestUpstreamJson` (`src/common/upstream-http.ts`).
 - **Cross-chain swaps reach more networks than `Chain`.** Every network NEAR
@@ -361,16 +373,20 @@ table. These are the rules that did not hold on their own:
   (`src/cross-chain-swaps/cross-chain-networks.ts`), a
   `Record<CrossChainNetworkId, …>` holding its address rule, transaction-id rule
   and deposit-link builder (null where the chain has no wallet-link standard, so
-  `depositUri` is nullable). The three settled chains keep their ids and reuse
-  `CHAIN_ADDRESS_RULES` and `DEPOSIT_LINK_BUILDERS`; the others use 1Click's
+  `depositUri` is nullable). The three settled chains it reaches (`RouteChain`) keep
+  their ids and reuse `CHAIN_ADDRESS_RULES` and `DEPOSIT_LINK_BUILDERS`; the others use 1Click's
   `blockchain` code. An EIP-681 link names a chain id from
   `CROSS_CHAIN_EVM_CHAIN_IDS` only after it was checked against chainlist and the
   chain's own `eth_chainId`: a wrong id sends the deposit to another chain. A
   1Click blockchain with no entry (`qtc`, `adi`) is never offered: an address this
   service cannot validate is a refund it cannot promise.
-- **Payment links settle on every one of those networks** (`PAYMENT_NETWORKS` in
-  `src/payment-intents/payment-networks.ts` IS `CROSS_CHAIN_NETWORK_IDS`: never a
-  second list). Stellar, Solana and Monad keep their wallet links and verifiers; a
+- **Payment links settle on every one of those networks, and on Arc**
+  (`PAYMENT_NETWORKS` in `src/payment-intents/payment-networks.ts` is DERIVED: every
+  `Chain`, then every other `CROSS_CHAIN_NETWORK_IDS` entry; never a hand-kept second
+  list). A payment network's name and address and transaction-id rules come from
+  `PAYMENT_NETWORK_RULES` (`CROSS_CHAIN_NETWORKS` plus the chains the route does not
+  reach, `NativeOnlyChain`): never index `CROSS_CHAIN_NETWORKS` with an `intent.chain`,
+  it has no Arc. Stellar, Solana, Monad and Arc keep their wallet links and verifiers; a
   link on any other network (`DepositNetwork`) has no verifier of ours and is paid
   only through `payment_deposit` rows: an EXACT_OUTPUT 1Click quote per payer that
   pays the intent's destination exactly its amount, polled by
@@ -379,9 +395,10 @@ table. These are the rules that did not hold on their own:
   status). Code that reads `intent.chain` goes through `paymentNetworkOf` and
   `isChain` before reaching a `Record<Chain, …>` (verifiers, `PAY_TO`, tx-id rules):
   the chain observer never scans a deposit network, `validate` and a PATCHed
-  `txHash` are refused there. A link on the three chains takes deposits too only
-  with `crossChainFeeBps` recorded at create (mainnet, no merchant fee, not a
-  Monad link found by amount), because the deposit routes are keyless and
+  `txHash` are refused there. A link on Stellar, Solana or Monad takes deposits too only
+  with `crossChainFeeBps` recorded at create (mainnet, no merchant fee, not an
+  EVM link found by amount), and an Arc link never does (`isRoutedNetwork`, checked
+  first by `crossChainPaymentRefusal`), because the deposit routes are keyless and
   the plan rate comes from a header. A link with no amount is paid for the amount
   the payer types (`requestedAmountOut`); a merchant fee on a deposit network is
   the route's own app fee (`merchantAppFee`, a route account, never an on-chain
@@ -395,8 +412,10 @@ table. These are the rules that did not hold on their own:
   its browser holds; the token is never stored or logged), no session can change
   another's and none is ever refused for another's email; a deposit belongs to
   the session that opened it, which is its proof; a native payment's receipt goes
-  to the session whose wallet account or transaction (registered with its token
-  on `events`) matches the settlement's `source` / `txHash` (registered at least
+  to the session whose wallet transaction (registered with its token on
+  `events`) matches the settlement's `txHash`; a registered account proves
+  nothing, since an address is public before it pays and anyone could register
+  a merchant's known payer ahead of time (security review, 2026-11-24) (registered at least
   `PAYMENT_PAYER_PROOF_MARGIN_MS` before the transaction's on-chain time,
   `paidOnChainAt`, never when that time is unknown: fail closed; matched by that
   session alone; a hash the observer already saw is refused),
@@ -432,7 +451,7 @@ table. These are the rules that did not hold on their own:
   and refunds come from `SANDBOX_TREASURY_PRIVATE_KEY`: each is signed and written to
   `sandbox_payout` (unique per deposit and kind) BEFORE it is broadcast, and only that row's
   bytes are ever rebroadcast; never sign a second transaction for a deposit. The treasury key is
-  never the Monad relayer's (the boot refuses it) and every sandbox RPC is checked against the
+  never the Monad or Arc relayer's (the boot refuses it) and every sandbox RPC is checked against the
   chain id in `SANDBOX_NETWORKS`, so it cannot reach mainnet. A test network goes into that
   table only after its chain id was checked on chainlist and `eth_chainId` and its test USDC
   answered `symbol`/`decimals` on-chain; where there is no official test USDC it uses cUSD
@@ -463,7 +482,7 @@ table. These are the rules that did not hold on their own:
   calls nothing but its immutable `aggregator` and the two tokens, pulls only from
   the caller and leaves no allowance; keep all three when changing it, and a changed
   router is a new deployment the operator points the variable at.
-- **Monad deposit addresses are `CREATE2` addresses of
+- **Monad and Arc deposit addresses are `CREATE2` addresses of
   `contracts/PaymentForwarder.sol`**, or, for an intent with a merchant fee, of
   `contracts/PaymentSplitForwarder.sol` (two more constructor arguments: the
   fee's wallet and amount; the row's `feeWallet` / `merchantFee` say which), so
@@ -478,7 +497,34 @@ table. These are the rules that did not hold on their own:
   money stays safe but stuck until the old artifact is restored. The relayer key
   signs only forwarder deployments and
   flushes; it must never gain another use, because "it holds gas money only" is
-  the whole security argument.
+  the whole security argument. There is one relayer key per EVM chain
+  (`MONAD_RELAYER_PRIVATE_KEY`, `ARC_RELAYER_PRIVATE_KEY`; the boot refuses the same
+  key for both), one forwarder job for all
+  of them (`EvmDepositForwarderService`, lock `881_011`, each row's `chain` picking its
+  RPC and relayer), and neither a relayer bid nor a quoted deposit fee ever goes under
+  the chain's mempool floor (`EVM_MIN_MAX_FEE_PER_GAS`: Arc drops anything under 20 gwei
+  without an error). A deployed forwarder is flushed only for a balance worth the gas
+  (`flushJustified`: above the row's fee, or a whole payment where the asset has no
+  price): a flush pays the relayer nothing, and dust would make it burn gas. An Arc
+  link exists ONLY with a deposit address (`EVM_DIRECT_PAY_LINKS`, security review
+  2026-11-24): a direct EIP-681 link is matched by destination, asset and amount, which
+  let one payer settle another's older intent and another tenant take a merchant's
+  payments first come. Without `ARC_RELAYER_PRIVATE_KEY` the create refuses Arc
+  (`400 network_unsupported`) and the networks catalog reports it unavailable, both
+  through `evmPayLinkRefusal`; Monad keeps its direct mode.
+- **Arc's USDC is its gas coin, charged through its ERC-20 interface.** One balance has
+  two views: 18 decimals native, 6 through `0x3600…` (`ARC_USDC`, whose `balanceOf`
+  truncates dust). An Arc link never charges the bare coin: an omitted asset, `native`
+  and `USDC` resolve to that contract in 6 decimals (`evmPresetOf`, with EURC the other
+  preset per tier in `EVM_TOKEN_PRESETS`). A payer's wallet may send it either way, and
+  Arc logs every native movement once from its system emitter (EIP-7708,
+  `ARC_TRANSFER_EMITTER`, 18 decimals) while an ERC-20 transfer is ALSO logged by the
+  token (6). So the verifier reads ONLY the emitter's log for USDC (`gasCoinOf`,
+  `loggedAmount`, cut to 6 decimals): reading both would count one payment twice, and
+  reading only the token's would miss a value transfer. Gas is paid in USDC, so a USDC
+  deposit's relayer fee is priced from the gas price (in 6 decimals) unless
+  `ARC_DEPOSIT_TOKEN_FEES` names one. Each of these was read on Arc's own nodes
+  (2026-11-18): change them only after reading them there again.
 
 ## Security invariants a change must keep
 
@@ -528,6 +574,13 @@ Each of these was a real finding in this codebase, not a hypothetical:
   their deposits and read its USDT0 transfers, and a production key read its test-network
   private payments, until they did. Another network's row is the 404 of a missing one. A new
   by-id lookup of a network-scoped row takes the network too.
+- **`FAILED` needs a failed transaction that is bound to the intent.** Only Stellar
+  (memo) and Solana (reference) report `failedOnChain`. A reverted EVM transaction
+  carries nothing of the intent's (payee, token and amount are public), so anyone
+  could revert a `transfer(payee, amount)` for the price of gas and, through
+  `validate`, make the intent `FAILED`, which is final: `EvmVerifierService` checks
+  the receipt's status before any match and answers a reverted one as a plain
+  mismatch, on Monad and Arc alike.
 - **A route whose cost an error cannot refund — XLM spent, an account created
   on-chain — carries `@RateLimit`.**
 - **A submit route relays only a transaction this service built, for the same
@@ -978,7 +1031,7 @@ How failures get documented — use these, never a hand-written
 | validates input, is gated, takes a `{param}`, or can throw at all | nothing | 400 / 401 + 403 / 404 / 500, attached by `swagger.ts` |
 | is `@Public()` | nothing — the decorator does it | `security: []`, no 401/403 |
 | is `@RateLimit(...)` | nothing — the decorator does it | 429 + `Retry-After`, `ratelimit-*` on 2xx |
-| calls a third party while serving — any `UpstreamProvider`, by what it is: `Fiat partner`, `Horizon`, `Solana`, `Monad`, `Cross-chain route`, `Solana swap route`, `Monad swap route`, `Soroban RPC`, `Vault protocol`, `Protected-payments service`, `P2P marketplace` | `@ApiUpstream('Fiat partner', …)` on **that handler**, naming each one it reaches | 502/503/504 per provider (Horizon: 503 only — `UPSTREAM_FAILURES` in `src/swagger.ts`) |
+| calls a third party while serving: any `UpstreamProvider`, by what it is: `Fiat partner`, `Horizon`, `Solana`, `Monad`, `Arc`, `Cross-chain route`, `Solana swap route`, `Monad swap route`, `Soroban RPC`, `Vault protocol`, `Protected-payments service`, `P2P marketplace` | `@ApiUpstream('Fiat partner', …)` on **that handler**, naming each one it reaches | 502/503/504 per provider (Horizon: 503 only, `UPSTREAM_FAILURES` in `src/swagger.ts`) |
 | throws a code of its own (409, a domain 400, a kill-switch 403) | `@ApiErrorResponse({ status, codes })` | that status with one real example per code |
 
 - **A new `ApiErrorCode` needs an entry in `API_ERROR_CASES`**

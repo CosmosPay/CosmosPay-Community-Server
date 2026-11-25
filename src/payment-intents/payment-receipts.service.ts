@@ -20,7 +20,10 @@ import {
 } from '@/payment-intents/payment-intents.constants';
 import { paymentExplorerTxUrl } from '@/payment-intents/payment-explorers';
 import { receiptRecipient } from '@/payment-intents/payment-payer-session';
-import { isPaymentNetwork } from '@/payment-intents/payment-networks';
+import {
+  isPaymentNetwork,
+  PAYMENT_NETWORK_RULES,
+} from '@/payment-intents/payment-networks';
 import { PrismaService } from '@/prisma/prisma.service';
 import { WEBHOOK_EVENT, WebhookEventPayload } from '@/webhooks/webhook-events';
 
@@ -189,7 +192,7 @@ export class PaymentReceiptsService {
 
     const lang = asReceiptLang(recipient.session.lang);
     const network = isPaymentNetwork(intent.chain)
-      ? CROSS_CHAIN_NETWORKS[intent.chain]
+      ? PAYMENT_NETWORK_RULES[intent.chain]
       : null;
     const rendered = renderPaymentReceiptEmail({
       lang,

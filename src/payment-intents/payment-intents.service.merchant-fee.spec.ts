@@ -78,7 +78,11 @@ describe('PaymentIntentsService merchant fee', () => {
     } as never;
     // A Solana link: the asset resolves as SOL, the reference is fixed.
     const chainLinks = {
-      normalize: (_chain: string, dto: { destination: string }) => ({
+      normalize: (
+        _chain: string,
+        _network: string,
+        dto: { destination: string },
+      ) => ({
         destination: dto.destination,
         asset: 'native',
         assetIssuer: null,

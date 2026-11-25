@@ -568,9 +568,9 @@ export class PaymentLinksController {
     status: 400,
     codes: [ApiErrorCode.ValidationFailed],
     description:
-      'The link cannot be paid from another network: a Stellar, Solana or ' +
-      'Monad link on a test network or with a merchant fee, or one created ' +
-      'without payments from other networks.',
+      'The link cannot be paid from another network: an Arc link, a Stellar, ' +
+      'Solana or Monad link on a test network or with a merchant fee, or one ' +
+      'created without payments from other networks.',
     examples: {
       [ApiErrorCode.ValidationFailed]: {
         summary: 'The link cannot be paid from another network',

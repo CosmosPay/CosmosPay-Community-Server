@@ -25,7 +25,7 @@ export class ValidatePaymentIntentDto {
   @ApiProperty({
     description:
       'The transaction to validate against this intent, in its chain’s own ' +
-      'form: a Stellar hash (64 hex), a Solana signature (base58) or a Monad ' +
+      'form: a Stellar hash (64 hex), a Solana signature (base58) or a Monad or Arc ' +
       'hash (0x + 64 hex). It must be the one the intent’s chain uses.',
     example: '3389e9f0d6b3e3f1c2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9',
   })
@@ -34,7 +34,7 @@ export class ValidatePaymentIntentDto {
   @Matches(ANY_TX_ID_RE, {
     message:
       'txHash must be a transaction id: 64 hex characters (Stellar), a base58 ' +
-      'signature (Solana) or 0x + 64 hex characters (Monad)',
+      'signature (Solana) or 0x + 64 hex characters (Monad, Arc)',
   })
   txHash!: string;
 }

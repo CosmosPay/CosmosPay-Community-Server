@@ -16,7 +16,7 @@ import {
   sameMerchantFee,
   splitMerchantFee,
 } from '@/common/merchant-fee/merchant-fee';
-import type { OtherChain } from '@/chains/chains.constants';
+import type { SwapVenueChain } from '@/chains/chains.constants';
 import { formatUnits, parseUnits } from '@/chains/units';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
@@ -100,7 +100,7 @@ export interface ChainSwapSubmitOutcome {
 
 /** A priced request, before or after building. */
 interface Priced {
-  chain: OtherChain;
+  chain: SwapVenueChain;
   /** The gross amount the request named (`request.amount` is what is routed). */
   amount: bigint;
   /** The merchant fee, in the source asset; null without one. */
@@ -136,7 +136,7 @@ type BuildRequest = VenueRequest & { source: string };
 @Injectable()
 export class ChainSwapsService {
   private readonly logger = new Logger(ChainSwapsService.name);
-  private readonly venues: Record<OtherChain, ChainSwapVenue>;
+  private readonly venues: Record<SwapVenueChain, ChainSwapVenue>;
 
   constructor(
     private readonly config: ConfigService<AppConfig, true>,
@@ -155,7 +155,7 @@ export class ChainSwapsService {
   async quote(
     consumer: GatewayConsumer,
     dto: QuoteSwapDto,
-  ): Promise<SwapQuoteEntity & { chain: OtherChain; provider: string }> {
+  ): Promise<SwapQuoteEntity & { chain: SwapVenueChain; provider: string }> {
     const priced = await this.price(consumer, dto, dto.sourceAssetCode);
     const quote = await this.venues[priced.chain].quote(priced.request);
     const { send, dest } = priced.request;
@@ -284,7 +284,7 @@ export class ChainSwapsService {
   // ── Read ──────────────────────────────────────────────────────────────────
   async findAll(
     consumer: GatewayConsumer,
-    chain: OtherChain,
+    chain: SwapVenueChain,
     query: QuerySwapsDto,
   ): Promise<{
     data: PublicChainSwap[];
@@ -399,7 +399,7 @@ export class ChainSwapsService {
         'Send signedTransaction or txHash, not both',
       );
     }
-    const venue = this.venues[swap.chain as OtherChain];
+    const venue = this.venues[swap.chain as SwapVenueChain];
     if (txHash !== undefined) {
       return this.submitSent(consumer, swap, venue, txHash);
     }
@@ -567,7 +567,7 @@ export class ChainSwapsService {
     });
   }
 
-  venue(chain: OtherChain): ChainSwapVenue {
+  venue(chain: SwapVenueChain): ChainSwapVenue {
     return this.venues[chain];
   }
 
@@ -577,7 +577,7 @@ export class ChainSwapsService {
     dto: QuoteSwapDto & Partial<CreateSwapDto>,
     sourceAssetCode: string | undefined,
   ): Promise<Priced> {
-    const chain = dto.chain as OtherChain;
+    const chain = dto.chain as SwapVenueChain;
     if (resolveNetwork(this.config, consumer) !== 'public') {
       throw ApiError.badRequest(
         ApiErrorCode.NetworkUnsupported,
@@ -686,7 +686,7 @@ export class ChainSwapsService {
 
   /** Issuers, a memo and a separate destination only mean something on Stellar. */
   private refuseStellarOnlyFields(
-    chain: OtherChain,
+    chain: SwapVenueChain,
     dto: QuoteSwapDto & Partial<CreateSwapDto>,
   ): void {
     const stray = (

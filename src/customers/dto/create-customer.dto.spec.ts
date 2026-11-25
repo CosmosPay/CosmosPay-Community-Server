@@ -123,7 +123,7 @@ describe('CreateCustomerDto.wallets', () => {
       wallets: [{ chain: 'eth', address: MONAD }],
     });
     expect(errors).toContain(
-      'chain must be one of the following values: stellar, solana, monad',
+      'chain must be one of the following values: stellar, solana, monad, arc',
     );
   });
 

@@ -15,18 +15,20 @@ export type PayToFields = Pick<PaymentIntent, 'destination' | 'chainReference'>;
  *     intent's `reference` KEY, which the wallet attaches to the transfer as a
  *     read-only account. It is a fresh random key nobody holds, so money sent
  *     to it is gone.
- *   - Monad: the intent's CREATE2 deposit address when the deployment has a
- *     relayer — stored as `chainReference`, and the address the EIP-681 link
- *     pays; the forwarder later pays the merchant less `networkFee`. Without a
- *     relayer `chainReference` is null and the link pays `destination`.
+ *   - Monad and Arc: the intent's CREATE2 deposit address when the deployment
+ *     has the chain's relayer, stored as `chainReference`, and the address the
+ *     EIP-681 link pays; the forwarder later pays the merchant less
+ *     `networkFee`. Without a relayer `chainReference` is null and the link
+ *     pays `destination`.
  *
  * A table rather than one `chainReference ?? destination` for every chain: that
  * line is right on Monad and sends a Solana payer to a key nobody controls. The
- * EVM verifier reads the Monad entry, so the address a payment is checked
+ * EVM verifier reads the chain's entry, so the address a payment is checked
  * against and the address a payer is shown are one rule.
  */
 export const PAY_TO: Record<Chain, (intent: PayToFields) => string> = {
   stellar: (intent) => intent.destination,
   solana: (intent) => intent.destination,
   monad: (intent) => intent.chainReference ?? intent.destination,
+  arc: (intent) => intent.chainReference ?? intent.destination,
 };

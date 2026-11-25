@@ -43,7 +43,7 @@ export class CustomersController {
   @ApiOperation({
     summary: 'Create a customer',
     description:
-      'A customer holds up to 20 `wallets` on Stellar, Solana or Monad (the ' +
+      'A customer holds up to 20 `wallets` on Stellar, Solana, Monad or Arc (the ' +
       'deprecated `account` counts as one of them), and a wallet named twice ' +
       'counts once. Payments settled from any of them count toward ' +
       'the customer. A wallet another of your customers already holds is ' +
@@ -136,7 +136,7 @@ export class CustomersController {
   @ApiOperation({
     summary: 'Add a wallet to a customer',
     description:
-      'A customer holds any number of wallets (up to 20), on Stellar, Solana or Monad; ' +
+      'A customer holds any number of wallets (up to 20), on Stellar, Solana, Monad or Arc; ' +
       'payments paid from any of them count toward it. A wallet the customer already holds ' +
       'answers as it is.',
   })

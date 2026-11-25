@@ -64,7 +64,7 @@ export const DEFAULT_MONAD_RPC: Record<StellarNetwork, string> = {
 };
 
 /**
- * Budget for one JSON-RPC call to Solana or Monad. A single read (a
+ * Budget for one JSON-RPC call to Solana, Monad or Arc. A single read (a
  * transaction, a block number, a page of logs) — slower than that is an RPC
  * provider in trouble, and the observer retries on its next tick.
  */
@@ -76,6 +76,23 @@ export const DEFAULT_CHAIN_RPC_TIMEOUT_MS = 10_000;
  * more, and raising it lets the observer catch up in fewer calls.
  */
 export const DEFAULT_MONAD_LOG_BLOCK_RANGE = 100;
+
+/**
+ * Arc's public RPC endpoints, per network tier (docs.arc.io, "Connect to
+ * Arc"). Every call checks `eth_chainId` against `ARC_CHAIN_IDS` first.
+ */
+export const DEFAULT_ARC_RPC: Record<StellarNetwork, string> = {
+  public: 'https://rpc.mainnet.arc.io',
+  testnet: 'https://rpc.testnet.arc.io',
+};
+
+/**
+ * Blocks one `eth_getLogs` may span on Arc. The public endpoints answered a
+ * 10,000-block range and refused 10,001 ("requested range too large", both
+ * tiers, 2026-11-18); half of that leaves room for a provider with a lower
+ * cap, and at ~0.5 s a block it is still about 40 minutes of chain a call.
+ */
+export const DEFAULT_ARC_LOG_BLOCK_RANGE = 5_000;
 
 // --- Rate limiting ---
 

@@ -41,7 +41,7 @@ export class UpdatePaymentIntentDto {
   @ApiPropertyOptional({
     description:
       'The transaction once it is submitted, in its chain’s own form: a ' +
-      'Stellar hash (64 hex), a Solana signature (base58) or a Monad hash ' +
+      'Stellar hash (64 hex), a Solana signature (base58) or a Monad or Arc hash ' +
       '(0x + 64 hex). Hex is stored lowercase. A transaction already recorded ' +
       'on another of your payment intents is refused with 409 ' +
       '`idempotency_conflict`.',
@@ -58,7 +58,7 @@ export class UpdatePaymentIntentDto {
   @Matches(ANY_TX_ID_RE, {
     message:
       'txHash must be a transaction id: 64 hex characters (Stellar), a base58 ' +
-      'signature (Solana) or 0x + 64 hex characters (Monad)',
+      'signature (Solana) or 0x + 64 hex characters (Monad, Arc)',
   })
   txHash?: string;
 

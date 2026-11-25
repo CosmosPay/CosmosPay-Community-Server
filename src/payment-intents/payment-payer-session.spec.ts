@@ -100,7 +100,7 @@ describe('receiptRecipient', () => {
         ),
       ).toBeNull();
     }
-    // A late hash does not hide an account proven in time.
+    // Nor does an account registered in time: an address proves nothing.
     expect(
       receiptRecipient(
         [
@@ -115,13 +115,24 @@ describe('receiptRecipient', () => {
         ],
         SETTLED,
       ),
-    ).toEqual({
-      session: expect.objectContaining({ email: 'payer@example.com' }),
-      proven: true,
-    });
+    ).toBeNull();
   });
 
-  it("falls back to the session whose wallet account is the settlement's source", () => {
+  it("never takes the settlement's source account as proof: addresses are public", () => {
+    // A stranger registers a payer's known address before that payer pays.
+    expect(
+      receiptRecipient(
+        [
+          session('stranger@example.com', {
+            walletAddress: PAYER,
+            provenAt: at(2),
+          }),
+          session('payer@example.com'),
+        ],
+        SETTLED,
+      ),
+    ).toBeNull();
+    // Alone, a session that registered the account still gets no customer link.
     expect(
       receiptRecipient(
         [
@@ -129,13 +140,12 @@ describe('receiptRecipient', () => {
             walletAddress: PAYER,
             provenAt: at(2),
           }),
-          session('other@example.com'),
         ],
         SETTLED,
       ),
     ).toEqual({
       session: expect.objectContaining({ email: 'payer@example.com' }),
-      proven: true,
+      proven: false,
     });
   });
 

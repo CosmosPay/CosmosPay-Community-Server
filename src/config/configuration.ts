@@ -18,6 +18,8 @@ import {
   DEFAULT_KOYWE_SANDBOX_NETWORK,
   DEFAULT_KOYWE_SANDBOX_TOKEN,
   DEFAULT_KURU_BASE_URL,
+  DEFAULT_ARC_LOG_BLOCK_RANGE,
+  DEFAULT_ARC_RPC,
   DEFAULT_MONAD_LOG_BLOCK_RANGE,
   DEFAULT_MONAD_RPC,
   DEFAULT_NEAR_INTENTS_BASE_URL,
@@ -185,6 +187,27 @@ export interface BlindpayInstanceConfig {
   webhookSecret: string;
 }
 
+/**
+ * What every EVM chain this service settles on is configured with (`<CHAIN>_*`
+ * variables): one node per tier, the log scan's block range, and the relayer
+ * that turns deposit addresses on.
+ */
+export interface EvmChainSettings {
+  rpcUrls: Record<StellarNetwork, string>;
+  timeoutMs: number;
+  /** Blocks one `eth_getLogs` call may span; the RPC provider's limit. */
+  logBlockRange: number;
+  /**
+   * The relayer's secret key (hex). Set, every PAY intent on the chain gets
+   * its own CREATE2 deposit address and the relayer forwards what arrives;
+   * empty, intents pay the merchant directly and are matched by amount. It
+   * holds gas money only (see `contracts/PaymentForwarder.sol`).
+   */
+  relayerPrivateKey: string;
+  /** Per-token relayer fees for token deposits (`<CHAIN>_DEPOSIT_TOKEN_FEES`). */
+  depositTokenFees: EvmTokenFees;
+}
+
 export interface AppConfig {
   nodeEnv: string;
   /**
@@ -344,26 +367,19 @@ export interface AppConfig {
    * Monad (EVM), per network tier: `public` is mainnet, `testnet` is Monad's
    * testnet. The chain ids are not configurable — see `MONAD_CHAIN_IDS`.
    */
-  monad: {
-    rpcUrls: Record<StellarNetwork, string>;
-    timeoutMs: number;
-    /** Blocks one `eth_getLogs` call may span; the RPC provider's limit. */
-    logBlockRange: number;
-    /**
-     * The relayer's secret key (hex). Set, every Monad PAY intent gets its own
-     * CREATE2 deposit address and the relayer forwards what arrives; empty,
-     * Monad intents pay the merchant directly and are matched by amount. It
-     * holds gas money only — see `contracts/PaymentForwarder.sol`.
-     */
-    relayerPrivateKey: string;
-    /** Per-token relayer fees for token deposits (`MONAD_DEPOSIT_TOKEN_FEES`). */
-    depositTokenFees: EvmTokenFees;
+  monad: EvmChainSettings & {
     /**
      * The address the Monad swap commission is paid to (Kuru Flow's
      * `referrerAddress`). Empty disables it; a plan that charges one refuses.
      */
     swapFeeWallet: string;
   };
+  /**
+   * Arc (EVM, USDC as its gas coin), per network tier: `public` is mainnet,
+   * `testnet` is Arc Testnet. The chain ids are not configurable: see
+   * `ARC_CHAIN_IDS`. No swap venue, so no swap fee wallet.
+   */
+  arc: EvmChainSettings;
   /**
    * The aggregators that build same-chain swaps off Stellar: Jupiter on
    * Solana, Kuru Flow on Monad. Mainnet only, both of them.
@@ -1067,6 +1083,25 @@ export default (): AppConfig => ({
     relayerPrivateKey: process.env.MONAD_RELAYER_PRIVATE_KEY?.trim() ?? '',
     depositTokenFees: parseEvmTokenFees(process.env.MONAD_DEPOSIT_TOKEN_FEES),
     swapFeeWallet: process.env.MONAD_SWAP_FEE_WALLET?.trim() ?? '',
+  },
+  arc: {
+    rpcUrls: {
+      public: process.env.ARC_RPC_URL_MAINNET ?? DEFAULT_ARC_RPC.public,
+      testnet: process.env.ARC_RPC_URL_TESTNET ?? DEFAULT_ARC_RPC.testnet,
+    },
+    timeoutMs: parseInt(
+      process.env.ARC_RPC_TIMEOUT_MS ?? String(DEFAULT_CHAIN_RPC_TIMEOUT_MS),
+      10,
+    ),
+    logBlockRange: parseInt(
+      process.env.ARC_LOG_BLOCK_RANGE ?? String(DEFAULT_ARC_LOG_BLOCK_RANGE),
+      10,
+    ),
+    relayerPrivateKey: process.env.ARC_RELAYER_PRIVATE_KEY?.trim() ?? '',
+    depositTokenFees: parseEvmTokenFees(
+      process.env.ARC_DEPOSIT_TOKEN_FEES,
+      'ARC_DEPOSIT_TOKEN_FEES',
+    ),
   },
   swapAggregators: {
     jupiter: {

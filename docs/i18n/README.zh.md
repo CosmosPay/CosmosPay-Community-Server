@@ -467,6 +467,7 @@ platform 的 `COSMOS_API_URL`，用逗号分隔，然后在那里运行 `npm run
 有两条路径使用这同一条规则：
 
 - **手动：** `POST /v1/payment-intents/:id/validate`，请求体为 `{ "txHash": "<64-hex>" }`。匹配时，意图被置为 `SUCCEEDED`（并保存 `txHash`），同时触发 `PAYMENT_INTENT_SUCCEEDED` webhook。链上失败的交易**只有在它确实是该意图自己的支付时**——memo、目标地址和资产均相同——才会把意图标记为 `FAILED`。其他任何交易，无论失败与否，都属于不匹配，状态保持不变，以便仍可提交正确的交易。通过 `PATCH /v1/payment-intents/:id` 上报的 `txHash` 永远不会单凭自己结算一个意图：它必须是一个 64 字符的十六进制哈希，会以小写形式存储，并且只在发起调用的消费者自己的意图范围内保持唯一（与该消费者另一个意图冲突时返回 `409 idempotency_conflict`）。
+  在 Monad 和 Arc 上，失败的交易一律视为不匹配：它不带任何把它绑定到该意图的 memo 或 reference，因此永远不会把意图标记为 `FAILED`。
 - **自动（常驻观察器）：** `PaymentIntentObserverService` 每隔 `OBSERVER_INTERVAL_MS` 轮询一次 Horizon，查找 `PENDING` 状态的意图——按上报的 `txHash`，或扫描发往目标地址的支付——并以同样的方式终结匹配的意图，因此状态会变化、事件会触发，**无需任何人调用 API**。每个周期对每个消费者最多处理 `OBSERVER_MAX_INTENTS_PER_CONSUMER`（10）个意图，且从不扫描已过期的意图，因此单个消费者无法拖慢其他所有人的结算。本地开发时可用 `OBSERVER_ENABLED=false` 关闭。
 
 **过期检查会先查链。** 一个已超过生命周期的意图在被标记为 `EXPIRED` 之前会再验证一次：如果它的支付已经上链，就改为结算为 `SUCCEEDED`；如果无法连接 Horizon，就留给下一个周期处理。当该笔支付的哈希已经存在于同一个消费者的另一个意图上时，该意图会被置为过期，而不是无休止地重试。在过期*之后*才被验证的支付——无论是被观察器还是被 `validate`——仍会把一个 `EXPIRED` 的意图变为 `SUCCEEDED` 并触发 `PAYMENT_INTENT_SUCCEEDED`，因此请不要把 `EXPIRED` 当作最终状态。该扫描会回溯读取目标地址自意图创建以来的所有支付，最多 1,000 条（5 页，每页 200 条）；如果某个目标地址在一个意图的生命周期内收到的支付超过这个数量，请改用 `validate` 并携带哈希。
@@ -706,7 +707,7 @@ devnet 和 Monad testnet（10143）——所有链上的 `network` 都存为 `pu
   以这笔交易结算。手续费在创建意图时确定，并以 `networkFee` 显示：MON 为按当前价格计算的
   转发 gas 预算加 25%；代币为运营方在 `MONAD_DEPOSIT_TOKEN_FEES` 中的配置，未配置则为零
   （由 relayer 承担 gas）。会被手续费吞掉的金额返回 `400 invalid_amount`。意图过期或取消
-  后才到账的资金仍会转发给商户，付款方也可以用 `validate` 和自己的交易哈希提前结算。
+  后才到账的资金仍会转发给商户，付款方也可以用 `validate` 和自己的交易哈希提前结算。forwarder 部署后，之后到账的余额只有值得 relayer 付出的 gas 时才会被 flush：高于该充值自身的手续费，或对没有手续费的代币而言达到意图的完整金额（开放金额永不）；小额余额留在 forwarder 中，任何人都可以调用 `flush` / `flushToken`，且只会付给商户。
   relayer 密钥只存放 gas 资金：请适度充值并设置余额告警。字节码已提交
   （`src/evm/payment-forwarder.artifact.ts`），有一个 spec 会重新编译源码进行比对；所有
   充值地址都依赖它，只要旧地址仍可能收到资金，就绝不要修改它。
@@ -722,6 +723,17 @@ devnet 和 Monad testnet（10143）——所有链上的 `network` 都存为 `pu
   "assetCode": "USDC", "assetIssuer": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" }
 // response → { chain: "solana", uri: "solana:<base58>?amount=25.5&spl-token=…&reference=…&memo=…", chainReference, qr, … }
 ```
+
+### Arc 上的支付链接
+
+`chain: "arc"` 是 Arc，Circle 的 EVM 链，其 gas 以 USDC 支付，像 Monad 一样原生结算。`prod` 密钥访问 Arc 主网（chain id 5042），`dev` 密钥访问 Arc Testnet（5042002），`network` 存为 `public` / `testnet`。跨链路由不覆盖 Arc（它没有列出任何 Arc 代币），因此 Arc 链接只能在 Arc 上支付（`crossChainPayment` 始终为 false），Arc 也没有兑换路由：`/v1/swaps` 和 `/v1/cross-chain-swaps` 拒绝 `arc`（`400 validation_failed`）。其余一切与 Monad 相同：EIP-681 链接、观察器、带 `0x` + 64 位十六进制哈希的 `validate` / `PATCH`、配置 relayer 时的充值地址、通过充值地址收取的商户手续费、客户钱包、别名和钱包登录（EIP-191）、`GET /v1/payment-intents/networks`，以及浏览器链接（`https://explorer.arc.io`、`https://explorer.testnet.arc.io`）。
+
+- **USDC 通过其 ERC-20 接口收款。** Arc 的原生币是 USDC：作为原生币有 18 位小数，通过位于 `0x3600000000000000000000000000000000000000` 的 ERC-20 有 6 位，两者背后是同一个余额。Arc 链接从不直接收取原生币：省略资产、`native` 和 `USDC` 都会把该合约存为 `assetIssuer`，并带上 `asset: "USDC"` 和 `assetDecimals: 6`，因此金额最多 6 位小数，链接为 `ethereum:0x3600000000000000000000000000000000000000@5042/transfer?address=<payee>&uint256=<amount in 6 decimals>`。`EURC` 也是预设，每个层级各有自己的合约。其他任何 ERC-20 都通过 `assetIssuer` 指定，并像在 Monad 上一样在 Arc 上读取其 `decimals()`。
+- **两种付款方式都能结算，且任何付款都不会被计算两次。** 付款人的钱包可以把 USDC 作为 ERC-20 发送，也可以作为普通的价值转账发送：两者移动的是同一个余额。Arc 通过其系统发射器（`0xffff…fffe`，EIP-7708）以 18 位小数为每一笔 USDC 移动记录一次日志，ERC-20 转账还会由代币再以 6 位小数记录一次。验证器和观察器只读取发射器的日志，并截断为 6 位小数（低于一个 micro-USDC 的零头会被舍弃，与 `balanceOf` 相同），因此观察器也能找到价值转账，同一笔转账的两条日志永远不会被同时计算。EURC 和其他代币从其自身的 `Transfer` 日志读取。
+- **Arc 链接需要充值地址。** 没有 `ARC_RELAYER_PRIVATE_KEY` 时，Arc 上的链接会被拒绝（`400 network_unsupported`，在询问任何节点之前），`GET /v1/payment-intents/networks` 在两个层级都将 Arc 报告为 `available: false` 并附上原因。直接付款给商户的链接只能通过目标地址、资产和精确金额识别，因此一位客户的付款可能结算另一笔金额相同、更早的意图，其他账户也可以按某商户的地址和价格创建意图，按先到先得抢走其付款：Monad 保留这种模式，Arc 永远没有。配置该密钥后，每个 Arc 链接都有自己的充值地址（包括开放金额和商户手续费），由与 Monad 相同的 `contracts/PaymentForwarder.sol` 和 `PaymentSplitForwarder.sol` 转发。确定性部署代理已部署在 Arc 主网和测试网上，因此每个充值地址都是各自的 `CREATE2` 部署，无需事先部署任何合约。
+- **Relayer 的手续费以 USDC 计。** Arc 上的 gas 以 USDC 支付，因此 USDC 充值的 `networkFee` 按原生 MON 的方式定价：转发的 gas 预算（520k）乘以当前 gas 价格再加 25%，以 6 位小数表示（25 gwei 时为 0.01625 USDC），除非 `ARC_DEPOSIT_TOKEN_FEES` 为其指定了手续费。EURC 和其他代币只收取已配置的手续费。Relayer 的出价从不低于 Arc 的 20 gwei 下限（低于该下限的交易会被 Arc 静默丢弃，不返回任何错误），报价的手续费也从不低于该下限，无论节点的 `eth_gasPrice` 返回什么。
+- **打包即最终确认。** 交易在其区块中即为最终状态，因此一次确认即可结算；区块时间戳的精度为一秒，可能重复，观察器按区块号排序。
+- **运维。** 无需部署任何东西。要开启充值地址，请生成一个新密钥（绝不能是 Monad relayer 或沙盒金库的密钥：启动时两者都会被拒绝），设置 `ARC_RELAYER_PRIVATE_KEY`，并在它服务的每个层级向其地址转入 USDC：一次转发需要约 0.03 USDC 的可用余额（45 gwei 下的 gas 上限），实际花费约 0.012，因此 5 USDC 足够数百次转发。测试 USDC 可从 `https://faucet.circle.com` 获取。请对余额设置告警，而不是过量充值。没有该密钥时，Arc 链接会被拒绝，网络目录将 Arc 报告为不可用。公共 RPC 是默认值（`ARC_RPC_URL_MAINNET`、`ARC_RPC_URL_TESTNET`），每个节点在被信任前都会对照 Arc 的 chain id 进行校验。
 
 ### 支付链接：托管收银页背后的公开读取
 
@@ -747,8 +759,10 @@ devnet 和 Monad testnet（10143）——所有链上的 `network` 都存为 `pu
 - **佣金。** 从其他网络付款时，会在链接金额之外向 `NEAR_INTENTS_FEE_RECIPIENT` 支付套餐的 swap 佣金（`X-Plan-Swap-Fee-Bps`）：商户收到链接金额，费用由付款方的充值承担。费率在创建链接时读取（`crossChainFeeBps`），因为充值路由不需要密钥。费率没有收款方时，新网络上的链接会被拒绝（`503 misconfigured`）；在 Stellar、Solana 和 Monad 上，链接创建时不支持从其他网络付款。
 - **无需密钥且有边界。** 充值路由是 `/v1/payment-links/{id}` 下的 `@Public()` 路由，即网关已有的无密钥路由：链接 id 就是凭证。充值只向链接的收款地址支付其金额，只退款到 `refundTo`；同一客户端再次请求同一资产和退款地址时，会拿回它已打开的充值。每个客户端（一个 IPv4 地址或一个 IPv6 /48，仅以 HMAC 形式存储）在每个链接上最多有 `PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT`（2）个未完成充值（`409`），因此持有链接的人无法占用其他付款方的名额；每个链接每 `PAYMENT_DEPOSIT_LINK_WINDOW_MS`（5 分钟）从所有客户端接受 `PAYMENT_DEPOSIT_LINK_BUDGET`（20）个新充值，这是一个会回补的预算，超出时返回 `429` 和 `Retry-After`，而不是可能把付款方挡在外面的未完成充值计数。超过期限仍未付款的充值不计入任何限制。名额在实时报价之前于链接的 advisory lock 下预留（`payment_deposit_reservation`），因此并发请求无法同时通过计数。按客户端地址计预算：`payment-links:deposit-assets`（每分钟 30）、`payment-links:quote`（30）、`payment-links:deposits`（10）、`payment-links:deposit-read`（60）。 商户可以为单个链接提高这两项（创建时或通过 `PATCH` 设置 `depositLimits`），上限为每个付款方 `PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT_CEILING`（10）、每个窗口 `PAYMENT_DEPOSIT_LINK_BUDGET_CEILING`（200），由本服务校验。
 - **最低金额。** 路由有各自的最低金额，且会随时间变化。`GET /v1/payment-intents/{id}/route-check` 按链接金额对主要来源（`PAYMENT_ROUTE_PROBE_ORIGINS`）进行试算报价，供 dashboard 提醒哪些来源无法支付该金额（从不阻止链接）；`deposit-assets` 以 `routes` 返回同样的检查，供 checkout 带原因禁用这些来源。被拒绝的报价返回 `400 provider_error` 及原因，在任何充值地址生成之前显示。
-- **付款方邮箱与收据。** 托管 checkout 在提供任何付款方式之前先要求填写邮箱，并通过 `POST /v1/payment-links/{id}/payer` 将其记录为一个 checkout 会话：第一次调用返回一个随机的 `payerToken`（只存储其 SHA-256，且从不写入日志），页面保存它并在之后的调用中发送（更改邮箱、`events`、`deposits`）。每个会话保留自己的邮箱，任何会话都不能更改其他会话的邮箱，因此第二个访问者永远不会阻挡付款方。会话还可凭 token 在 `events` 上登记其付款方式（`address`，其钱包付款的账户；`txHash`，其钱包返回的交易）。付款成功后，`PaymentReceiptsService` 通过本服务的邮件发送器（`MAIL_*`）以该会话的语言发送收据，在各副本间只认领一次，并由 `PaymentReceiptSweeperService` 在三天内重试：从其他网络付款时发给充值所属的会话（只有它拿到了该充值地址）；否则发给登记的交易或账户与结算相符的会话（证明只有在交易链上时间之前至少 `PAYMENT_PAYER_PROOF_MARGIN_MS`（30 秒）登记时才计入；该时间未知时从不计入；两个会话都匹配时也不计入）；否则，当恰好只有一个会话填写了邮箱时发给它；否则不发送（`receiptSkippedAt`），商户可通过 `GET /v1/payment-intents/{id}/payer-emails` 查看填写的邮箱。`sent` 报告不证明任何事，也不决定任何事。只有在有证明（充值或匹配）时，付款方才会被关联到商户的客户（`emailProvidedByPayer: true`：未验证），且从不合并到商户创建的客户。在 checkout 之外扫描的钱包链接不带邮箱，因此无法发送收据。
-- **无人验证的地址，因此收据有边界。** 收据只包含本服务生成的内容（金额、资产、网络、日期、付款 id 和交易，以及指向 checkout 上付款页面和浏览器上交易的链接），从不包含链接的留言或其他商户文字。一个地址每天从所有商户合计最多收到 `PAYMENT_RECEIPT_MAX_PER_RECIPIENT`（10）份收据，一个商户每天最多发送 `PAYMENT_RECEIPT_MAX_PER_MERCHANT`（1000）份：超过任一限制的收据会等待窗口。剩余风险：如果付款方的钱包既不报告账户也不报告交易（例如在另一台设备上扫描的钱包链接），在多个会话填写了邮箱的链接上不会自动收到收据；商户可以看到填写的邮箱。
+- **付款方邮箱与收据。** 托管 checkout 在提供任何付款方式之前先要求填写邮箱，并通过 `POST /v1/payment-links/{id}/payer` 将其记录为一个 checkout 会话：第一次调用返回一个随机的 `payerToken`（只存储其 SHA-256，且从不写入日志），页面保存它并在之后的调用中发送（更改邮箱、`events`、`deposits`）。每个会话保留自己的邮箱，任何会话都不能更改其他会话的邮箱，因此第二个访问者永远不会阻挡付款方。会话还可凭 token 在 `events` 上登记其付款方式（`address`，其钱包付款的账户；`txHash`，其钱包返回的交易）。付款成功后，`PaymentReceiptsService` 通过本服务的邮件发送器（`MAIL_*`）以该会话的语言发送收据，在各副本间只认领一次，并由 `PaymentReceiptSweeperService` 在三天内重试：从其他网络付款时发给充值所属的会话（只有它拿到了该充值地址）；否则发给登记的交易与结算相符的会话（仅凭账户不能证明任何事，因为地址是公开的；证明只有在交易链上时间之前至少 `PAYMENT_PAYER_PROOF_MARGIN_MS`（30 秒）登记时才计入；该时间未知时从不计入；两个会话都匹配时也不计入）；否则，当恰好只有一个会话填写了邮箱时发给它；否则不发送（`receiptSkippedAt`），商户可通过 `GET /v1/payment-intents/{id}/payer-emails` 查看填写的邮箱。`sent` 报告不证明任何事，也不决定任何事。只有在有证明（充值或匹配）时，付款方才会被关联到商户的客户（`emailProvidedByPayer: true`：未验证），且从不合并到商户创建的客户。在 checkout 之外扫描的钱包链接不带邮箱，因此无法发送收据。
+- **无人验证的地址，因此收据有边界。** 收据只包含本服务生成的内容（金额、资产、网络、日期、付款 id 和交易，以及指向 checkout 上付款页面和浏览器上交易的链接），从不包含链接的留言或其他商户文字。一个地址每天从所有商户合计最多收到 `PAYMENT_RECEIPT_MAX_PER_RECIPIENT`（10）份收据，一个商户每天最多发送 `PAYMENT_RECEIPT_MAX_PER_MERCHANT`（1000）份：超过任一限制的收据会等待窗口。剩余风险：如果付款方的钱包不报告交易（例如在另一台设备上扫描的钱包链接），在多个会话填写了邮箱的链接上不会自动收到收据；商户可以看到填写的邮箱。
+
+Arc 也是一个支付网络，采用原生结算（见上文 Arc 一节）：`PAYMENT_NETWORKS` 先是所有链，然后是路由覆盖的其他网络，共 36 个。路由不覆盖 Arc，因此 Arc 链接永远不会从其他网络支付。
 
 ### 沙盒：测试网上的支付链接
 
@@ -770,6 +784,8 @@ Solana 或 Monad 账户签名的挑战在第一行之后多一行 `chain: <chain
 base58）；Monad 用 EIP-191 `personal_sign`（0x 十六进制；拒绝 high-s 签名）。Monad 地址以
 EIP-55 写法保存。恢复设置（`POST /v1/wallet/recovery/setup`）仍仅限 Stellar。账户的 key
 在每条链上都以同样的方式签发（见[没有任何请求依赖开发者平台](#没有任何请求依赖开发者平台)）。
+
+Arc 账户的登录方式与 Monad 账户相同：一行 `chain: arc`、EIP-191 `personal_sign`，以及 EIP-55 写法。
 
 ### 轻松恢复：在两台设备之间迁移钱包
 
@@ -984,6 +1000,8 @@ POST /v1/swaps/quote {chain} → POST /v1/swaps {chain, source} → wallet signs
   ——足够试用，不适合生产。Jupiter 默认使用免 key 档位；设置 `JUPITER_API_KEY` 后，请把
   `JUPITER_BASE_URL` 指向 `https://api.jup.ag/swap/v1`。
 
+Arc 没有兑换路由：校验会拒绝 `chain: arc`（`400 validation_failed`），跨链路由也不覆盖 Arc。
+
 ## 跨链 swap（NEAR Intents）
 
 **跨链** swap 由 [NEAR Intents](https://intents.near.org/) 通过其 1Click API 结算，
@@ -1097,6 +1115,7 @@ NEAR Intents 从输入中扣除它，报价的输出已是扣除后的净额，�
 | 跨链兑换（`POST /v1/cross-chain-swaps`） | NEAR Intents 的第二个 app fee。`wallet` 是 NEAR 账户 id，在 NEAR Intents 内入账。App fee 是存入金额的整数基点，因此费用换算成其对应的基点并向下取整；不足一个基点的费用会被拒绝。使用 `payer` 时，套餐佣金也按更大的存入金额计算 |
 | Solana 支付链接（`POST /v1/payment-intents/pay`，`chain: solana`） | Solana Pay 的 transfer request 只指定一个收款方，因此这类链接（需有 `amount`）是 Solana Pay **transaction request**：`uri` 为 `solana:<PAYMENT_LINK_API_URL>/v1/payment-links/{id}/solana-pay`，钱包向其 POST 付款方账户以获取交易：memo、携带链接 reference 的商户转账，以及手续费转账（缺少的代币账户会创建，由付款方支付）。SOL 手续费须转入已存在的账户。observer 通过 reference 找到它，且只有两部分都支付才会结算 |
 | Monad 支付链接（`POST /v1/payment-intents/pay`，`chain: monad`） | 仅在启用存款地址（`MONAD_RELAYER_PRIVATE_KEY`；否则返回 `merchant_fee_unsupported`）且有 `amount` 时：地址为 `contracts/PaymentSplitForwarder.sol`（手续费的钱包和金额是构造函数的另外两个参数，因此地址承诺了它们），其构造函数先付 relayer 费用，再付商户手续费，最后付商户。链接要求的存款为金额，付款方支付手续费时再加上手续费 |
+| Arc 支付链接（`POST /v1/payment-intents/pay`，`chain: arc`） | 与 Monad 相同：仅在启用充值地址（`ARC_RELAYER_PRIVATE_KEY`；未启用时完全不能创建 Arc 链接：`network_unsupported`）且有 `amount` 时，通过 `contracts/PaymentSplitForwarder.sol` 以链接的资产支付（通过 ERC-20 接口的 USDC、EURC 或其他 ERC-20） |
 | Solana 兑换（`POST /v1/swaps`，`chain: solana`） | Jupiter 每笔兑换只支付一个集成方费用，已被套餐佣金使用，因此手续费转账（从源账户、以源资产支付：SOL 用 System Program 转账，否则先创建钱包的代币账户再 TransferChecked）被追加到 Jupiter 自己的 v0 交易中：复用其地址查找表已加载的账户，重写所有索引，提高其计算单元上限，并以最多 40 个账户请求路由，使其仍能放入一个数据包。SOL 手续费须转入已存在的账户 |
 | 隐私支付（`POST /v1/zk-payments`） | 付款方以 XLM 向 `wallet` 进行第三笔保密转账，使该费用与付款本身一样保密。`wallet` 必须在 Cosmos Pay 的代币上持有审计方 0 下的保密账户（否则返回 `400 recipient_not_registered`），且不能是收款方或手续费账户。0.18% 的佣金仍按 `amount` 计算，记录中的 `amount` 是付款方支付的总额。confirm 以 `merchantFeeTxHash` 接收第三个哈希，并像另外两笔一样校验该转账 |
 | 流动性（`POST /v1/liquidity-pools/deposit` 与 `/withdraw`） | 存入或取出会移动两种资产，因此费用为每种资产的 `bps`（向下取整），在同一笔交易中按每种资产各一笔付款支付给 `wallet`，位于存入操作之后，或位于取出操作及其套餐佣金之后；`fixed` 会被拒绝（`400 validation_failed`）。存入时，`recipient` 从金额中扣除（进入池子的更少），`payer` 在其之上加收。取出时，无论 `paidBy` 为何，费用都从取出所得中按其保证的最低金额的比例扣除。`wallet` 必须存在并对两种资产都有 trustline。记录中的 `amount` / `asset` 是资产 A 的部分，`amountB` / `assetB` 是资产 B 的部分 |
@@ -1272,6 +1291,8 @@ Solana 用 ed25519 对挑战文本签名，Monad 用 EIP-191 `personal_sign`。�
 在 Stellar 上解析，除非 `?chain=` 指定了其他链——不指定链的钱包永远不会拿到它无法支付的
 地址——`GET /v1/aliases/by-address/{address}` 则根据地址本身的格式判断链。Monad 地址以
 EIP-55 写法保存和匹配。
+
+Arc 地址的用法与 Monad 地址相同（`chain: arc`、EIP-191、EIP-55）。仅凭地址无法区分 Arc 和 Monad，因此不带 `?chain=` 的 `by-address` 会把 `0x` 地址当作 Monad：要在 Arc 上查询，请传 `?chain=arc`。
 
 ### 路由
 
@@ -1758,6 +1779,15 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 - **付款请求（新增字段）：** 卖家和付款方视图中的 `methods`、卖家视图中的 `paidMethod`，以及状态 `processing`。按 `status` 分支的客户端必须处理 `processing`（已收款，代币在途）：它永远不会显示为过期，也不能取消（`409 request_closed`）。
 - **新路由**（插件 `koywe`）：`GET` 和 `POST /v1/onramp/transfer/account`、免密钥的 `POST /v1/payment-links/fiat/{id}/transfers` 以及 `POST /v1/onramp/transfer/webhooks`。新错误码：`invalid_document`、`method_unavailable` 和 `invalid_tax_id`（400）、`account_required`（403）、`account_exists`（409）、`transfer_unavailable`（503）。新预算：`payment-links-fiat:transfer`（每个客户端地址每分钟 10 次）和 `onramp-transfer:account`（5 次）。
 - **配置前保持关闭：** 将 `koywe` 加入 `PLUGINS_ENABLED`（与 `eldorado` 一起），设置每个环境的 `KOYWE_*` 变量和 `KOYWE_DOCUMENT_PEPPER`，添加网关路由，注册 webhook 和合作方的策略规则（见*银行转账收款*）。
+
+### Arc：第四条原生结算的链
+
+- **`arc` 是 `chain` 的新取值**，适用于支付意图和链接、客户钱包、别名和钱包登录，也出现在每个列出链的 OpenAPI 枚举中（`PAYMENT_NETWORKS` 现在有 36 项，`GET /v1/payment-intents/networks` 多一行）。对 `chain` 做分支判断的客户端应处理它。现有内容不变：Monad 保持原有行为和变量，未指定链的 `0x` 地址仍按 Monad 读取。
+- **无需迁移：** 链以文本存储，Arc 的充值地址与 Monad 的一起存入 `evm_deposit_address`（`chain = 'arc'`）。
+- **新变量，均为可选：** `ARC_RPC_URL_MAINNET`、`ARC_RPC_URL_TESTNET`、`ARC_RPC_TIMEOUT_MS`、`ARC_LOG_BLOCK_RANGE`、`ARC_RELAYER_PRIVATE_KEY`、`ARC_DEPOSIT_TOKEN_FEES`。没有 relayer 密钥时，Arc 链接会被拒绝（`400 network_unsupported`），`GET /v1/payment-intents/networks` 将 Arc 报告为不可用；有密钥时，请在每个层级为其地址充值 USDC（见 Arc 一节）。启动时会拒绝与 `MONAD_RELAYER_PRIVATE_KEY` 相同的 `ARC_RELAYER_PRIVATE_KEY`。
+- **Monad 与 Arc：已部署 forwarder 上的小额余额不再被 flush。** forwarder 部署后到账的余额，只有值得 gas 时 relayer 才会 flush：高于该充值自身的手续费，或对没有手续费的代币而言达到意图的完整金额（开放金额永不）。更小的余额留在 forwarder 中，任何人都可以调用 `flush` / `flushToken`，它们只会付给商户。充值手续费的报价也从不低于该链的 gas 下限（Arc 为 20 gwei）。
+- **Arc 不支持：** 同链兑换和跨链兑换、来自其他网络的付款、USDT0、受保护付款、私密付款以及沙盒。兑换路由在校验时拒绝 `arc`。
+- **Monad：回滚的交易不再使意图失败。** `POST /v1/payment-intents/{id}/validate` 过去会在一笔回滚交易调用了代币的 `transfer(payee, amount)` 或向收款方发送了该金额时，把 Monad 意图标记为 `FAILED`。这样的交易不带任何属于该意图的内容，因此任何人只需付 gas 就能把意图变成 `FAILED`（终态）。现在在 Monad 和 Arc 上它只是普通的不匹配（`valid: false`，状态不变）；由 memo 或 reference 绑定的 Stellar 和 Solana 不变。
 
 ### 支付链接：测试网沙盒
 
@@ -2481,8 +2511,14 @@ curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops"
 | `MONAD_LOG_BLOCK_RANGE` | 否 | `100` | 一次 `eth_getLogs` 可覆盖的区块数——RPC 服务商的上限（公共 RPC 允许 100） |
 | `MONAD_RELAYER_PRIVATE_KEY` | 否 | — | relayer 密钥（32 字节 hex）。设置后每个 Monad 意图都有自己的充值地址，relayer 会扣除手续费后把充值转发给商户。只存放 gas 资金：它部署的转发合约不能向其他任何人付款 |
 | `MONAD_DEPOSIT_TOKEN_FEES` | 否 | — | 每种 ERC-20 充值的 relayer 手续费，JSON `{"0xToken": "0.05"}`，以代币单位计。未配置的代币免费转发（gas 由 relayer 支付） |
+| `ARC_RPC_URL_MAINNET` | 否 | `https://rpc.mainnet.arc.io` | `prod` 密钥使用的 Arc RPC（chain id 5042，使用前校验） |
+| `ARC_RPC_URL_TESTNET` | 否 | `https://rpc.testnet.arc.io` | `dev` 密钥使用的 Arc RPC（Arc Testnet，chain id 5042002） |
+| `ARC_RPC_TIMEOUT_MS` | 否 | `10000` | 单次 Arc RPC 调用的时间预算（毫秒） |
+| `ARC_LOG_BLOCK_RANGE` | 否 | `5000` | Arc 上一次 `eth_getLogs` 可覆盖的区块数：服务商的上限（公共 RPC 允许 10,000） |
+| `ARC_RELAYER_PRIVATE_KEY` | 否 | 无 | Arc relayer 密钥（32 字节 hex），与 Monad 上的 `MONAD_RELAYER_PRIVATE_KEY` 相同：设置后每个 Arc 链接都有自己的充值地址；未设置时 Arc 链接会被拒绝。只存放 gas 资金（USDC）；绝不能是沙盒金库或 Monad relayer 的密钥（启动时两者都会被拒绝） |
+| `ARC_DEPOSIT_TOKEN_FEES` | 否 | 无 | Arc 上每种 ERC-20 充值的 relayer 手续费，JSON `{"0xToken": "0.05"}`，以代币单位计。USDC 无需配置（其手续费按 gas 定价）；其他未配置的代币免费转发 |
 | `SANDBOX_DEPOSIT_SEED` | 否 | 无 | 沙盒的 HD 种子（16 到 64 字节，hex）。与 `SANDBOX_TREASURY_PRIVATE_KEY` 一起开启沙盒：`dev` 密钥在通过充值地址付款的网络上的链接在测试网上结算。仅限测试资金 |
-| `SANDBOX_TREASURY_PRIVATE_KEY` | 否 | 无 | 沙盒金库密钥（32 字节 hex）：在 EVM 测试网上支付沙盒的付款和退款，并作为其他每个测试网上金库自有密钥的根（按网络 HKDF 派生）。绝不能是主网密钥；启动时拒绝 `MONAD_RELAYER_PRIVATE_KEY` |
+| `SANDBOX_TREASURY_PRIVATE_KEY` | 否 | 无 | 沙盒金库密钥（32 字节 hex）：在 EVM 测试网上支付沙盒的付款和退款，并作为其他每个测试网上金库自有密钥的根（按网络 HKDF 派生）。绝不能是主网密钥；启动时拒绝 `MONAD_RELAYER_PRIVATE_KEY` / `ARC_RELAYER_PRIVATE_KEY` |
 | `SANDBOX_RPC_URLS` | 否 | 测试网公共 RPC | 逗号分隔的 `net=url` 对，替换某个测试网的节点（JSON-RPC URL；`sui` 例外，为 GraphQL URL；`aptos` 为其 REST API 的 `/v1` 基础地址）。每个在被信任前都会核验其测试网的链身份 |
 | `SANDBOX_CUSD_ADDRESSES` | 否 | 无 | `net=0x...` 对：cUSD 的部署地址（`npm run sandbox:deploy-cusd`）。没有条目的 cUSD 网络保持不可用 |
 | `SANDBOX_RPC_TIMEOUT_MS` | 否 | `15000` | 沙盒对测试网单次调用的时间预算（ms） |
